@@ -3,8 +3,11 @@
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\MeetingController;
+use App\Http\Controllers\PermissionController;
 use App\Http\Controllers\QRCodeController;
+use App\Http\Controllers\RoleController;
 use App\Http\Controllers\UserController;
+
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -18,6 +21,14 @@ use Illuminate\Support\Facades\Route;
 | is assigned the "api" middleware group. Enjoy building your API!
 |
 */
+Route::get('/permissions', [PermissionController::class, 'index']);
+Route::post('/roles', [PermissionController::class, 'store']);
+
+Route::get('/get-roles', [RoleController::class, 'index']);
+
+Route::post('/update-roles/{id}', [RoleController::class, 'update']);
+
+
 Route::get('/get-events', [EventController::class, 'index']);
 Route::post('/store-events', [EventController::class, 'store']);
 Route::post('/update-events', [EventController::class, 'update']);

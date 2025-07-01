@@ -62,7 +62,7 @@ public function register(Request $request)
             'password' => 'required'
         ]);
 
-        $user = User::with('details')->where('email', $request->email)->first();
+        $user = User::with('details','role')->where('email', $request->email)->first();
 
         if (!$user || !Hash::check($request->password, $user->password)) {
             return response()->json(['message' => 'Invalid email or password'], 401);
