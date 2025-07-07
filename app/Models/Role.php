@@ -13,6 +13,6 @@ class Role extends Model
     protected $table = 'roles';
     public function role_permissions()
     {
-        return $this->hasMany(Role_Permissions::class, 'role_id', 'id');
+        return $this->hasMany(Role_Permissions::class, 'role_id', 'id')->where('status_id', 1);
     }
 }

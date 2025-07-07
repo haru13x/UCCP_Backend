@@ -12,44 +12,61 @@ use Illuminate\Support\Facades\Storage;
 use SimpleSoftwareIO\QrCode\Facades\QrCode;
 use App\Models\Event;
 use App\Models\QR;
-
+use Carbon\Carbon;
+use Illuminate\Support\Facades\File;
+use Illuminate\Support\Str;
 
 
 
 class QRCodeController extends Controller
 {
     public function generate($eventId)
-{
-    $event = Event::findOrFail($eventId);
+    {
+        $event = Event::findOrFail($eventId);
+        $timestamp = Carbon::now()->format('Ymd_His');
+        $barcode = $timestamp . $event->id;
+        $event->update(['barcode' => $barcode]); // Ensure barcode_id is set
+        // Check if QR already exists
+        if ($event->qrcode) {
+            return response()->json([
+                'message' => 'QR already exists',
+                'qr_url' => asset("storage/" . $event->qrcode->qr_path),
+            ]);
+        }
 
-    // Check if QR code already exists
-    if ($event->qrcode) {
+        // Generate QR code binary
+        $qrImage = \QrCode::format('png')
+            ->size(300)
+            ->generate("{$barcode}");
+
+        // Step 1: Save to a temporary path
+        $tmpPath = storage_path('app/tmp-qr.png');
+        File::put($tmpPath, $qrImage);
+
+        // Step 2: Move to public storage path manually
+        $fileName = 'event-' . $event->id . '-' . Str::random(8) . '.png';
+        $publicPath = public_path('storage/qrcodes');
+
+        // Ensure directory exists
+        if (!File::exists($publicPath)) {
+            File::makeDirectory($publicPath, 0755, true);
+        }
+
+        $finalPath = $publicPath . '/' . $fileName;
+        File::move($tmpPath, $finalPath);
+
+        // Step 3: Save in DB
+        $qr = new QR();
+        $qr->barcode = $barcode;
+        $qr->event_id = $event->id;
+        $qr->qr_path = 'qrcodes/' . $fileName;
+        $qr->save();
+
         return response()->json([
-            'message' => 'QR already exists',
-            'qr_url' => asset("storage/" . $event->qrcode->qr_path),
+            'message' => 'QR code generated successfully',
+            'qr_url' => asset('storage/qrcodes/' . $fileName),
         ]);
     }
-
-    // Generate QR code as PNG
-    $fileName = "qrcodes/event-" . $event->id . ".png";
-    $qrImage = QrCode::format('png')
-        ->size(300)
-        ->generate("EventID: {$event->id}");
-
-    // Save to public storage
-    Storage::disk('public')->put($fileName, $qrImage);
-
-    // Save QR record
-    $eventQr = new QR();
-    $eventQr->barcode_id = $event->id;
-    $eventQr->qr_path = $fileName;
-    $eventQr->save();
-
-    return response()->json([
-        'message' => 'QR code generated successfully',
-        'qr_url' => asset("storage/" . $fileName),
-    ]);
-}
     // public function generate($eventId)
     // {
     //     $event = Event::findOrFail($eventId);
@@ -78,22 +95,21 @@ class QRCodeController extends Controller
     //     ]);
     // }
 
-public function get($eventId)
-{
-    $qr = QR::where('barcode_id', $eventId)->first();
+    public function get($eventId)
+    {
+        $qr = QR::where('event_id', $eventId)->first();
 
-    if ($qr && $qr->qr_path) {
+        if ($qr && $qr->qr_path) {
+            return response()->json([
+                'success' => true,
+                'qr_url' => asset('storage/' . $qr->qr_path),
+            ]);
+        }
+
         return response()->json([
-            'success' => true,
-            'qr_url' => asset('storage/' . $qr->qr_path),
+            'success' => false,
+            'message' => 'QR code not found.',
+            'qr_url' => null,
         ]);
     }
-
-    return response()->json([
-        'success' => false,
-        'message' => 'QR code not found.',
-        'qr_url' => null,
-    ]);
-}
-
 }

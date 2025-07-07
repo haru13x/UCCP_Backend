@@ -21,36 +21,33 @@ use Illuminate\Support\Facades\Route;
 | is assigned the "api" middleware group. Enjoy building your API!
 |
 */
+Route::middleware('auth.token')->group(function () {
 Route::get('/permissions', [PermissionController::class, 'index']);
 Route::post('/roles', [PermissionController::class, 'store']);
 
 Route::get('/get-roles', [RoleController::class, 'index']);
 
 Route::post('/update-roles/{id}', [RoleController::class, 'update']);
+Route::put('/roles/{id}', [PermissionController::class, 'update']);
 
 
 Route::get('/get-events', [EventController::class, 'index']);
 Route::post('/store-events', [EventController::class, 'store']);
 Route::post('/update-events', [EventController::class, 'update']);
+Route::post('event/register/{id}', [EventController::class, 'register']);
 
-Route::get('/get-meetings', [MeetingController::class, 'index']);
-Route::post('/store-meetings', [MeetingController::class, 'store']);
-Route::post('/update-meetings', [MeetingController::class, 'update']);
 
 Route::get('/dashboard/chart', [DashboardController::class, 'chart']);
 Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
 
 Route::get('/events/today', [EventController::class, 'today']);
 Route::get('/events/upcoming', [EventController::class, 'upcoming']);
-
-Route::get('/meetings/today', [MeetingController::class, 'today']);
-Route::get('/meetings/upcoming', [MeetingController::class, 'upcoming']);
-
-
+Route::get('/events/past', [EventController::class, 'past']);
 Route::get('/qrcodes/{eventId}', [QRCodeController::class, 'get']);
 Route::post('/qrcodes/generate/{eventId}', [QRCodeController::class, 'generate']);
 
 Route::get('/get-users', [UserController::class, 'index']);
+});
 Route::post("/register",[UserController::class,"register"]);
 Route::post("/login",[UserController::class,"login"]);
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
