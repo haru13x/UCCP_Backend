@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Permissions;
 use App\Models\Role;
+use App\Models\Role_Permissions;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -64,4 +65,50 @@ class PermissionController extends Controller
         DB::rollBack();
         return response()->json(['error' => $e->getMessage()], 500);
     }}
+
+    public function update(Request $request, $id)
+{
+    $role = Role::findOrFail($id);
+
+    $role->update([
+        'name' => $request->name,
+        'slug' => $request->slug,
+        'description' => $request->description,
+    ]);
+
+    $selectedPermissionIds = $request->permissions ?? [];
+
+    // Get all current role_permission entries (active or inactive)
+    $currentRolePermissions = Role_Permissions::where('role_id', $id)->get()->keyBy('permission_id');
+
+    $allPermissionIds = Permissions::pluck('id')->toArray();
+
+    foreach ($allPermissionIds as $permId) {
+        $isSelected = in_array($permId, $selectedPermissionIds);
+        $existing = $currentRolePermissions->get($permId);
+
+        if ($isSelected) {
+            if ($existing) {
+                if ($existing->status_id != 1) {
+                    $existing->update(['status_id' => 1]);
+                }
+            } else {
+                // Only insert if it doesn't exist
+                Role_Permissions::create([
+                    'role_id' => $id,
+                    'permission_id' => $permId,
+                    'status_id' => 1,
+                    'created_by' => $request->created_by ?? auth()->id(),
+                ]);
+            }
+        } else {
+            if ($existing && $existing->status_id == 1) {
+                $existing->update(['status_id' => 2]);
+            }
+        }
+    }
+
+    return response()->json(['message' => 'Role and permissions updated']);
+}
+
 }
