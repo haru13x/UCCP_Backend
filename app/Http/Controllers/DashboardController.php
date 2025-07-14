@@ -37,7 +37,7 @@ public function chart(Request $request)
 
     $totalEvents = DB::table('events')->whereYear('start_date', $year)->count();
     $totalMeetings = DB::table('meetings')->whereYear('start_date', $year)->count();
- $totalUsers = DB::table('users')->whereYear('created_at', $year)->count();
+    $totalUsers = DB::table('users')->whereYear('created_at', $year)->count();
 
     return response()->json([
         'events' => $events,
@@ -53,6 +53,8 @@ public function summary()
     return response()->json([
         'users' => User::count(),
         'events' => Event::count(),
+        'todayEvents' => Event::whereDate('start_date', today())->count(),
+        'newUsers' => User::whereDate('created_at', today())->count(),
         'meetings' => Meeting::count(),
     ]);
 }
