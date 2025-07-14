@@ -44,7 +44,8 @@ class QRCodeController extends Controller
         File::put($tmpPath, $qrImage);
 
         // Step 2: Move to public storage path manually
-        $fileName = 'event-' . $event->id . '-' . Str::random(8) . '.png';
+      $fileName = 'event-' . $barcode . '.png';
+
         $publicPath = public_path('storage/qrcodes');
 
         // Ensure directory exists

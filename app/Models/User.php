@@ -19,6 +19,10 @@ class User extends Model
     public function role(){
         return $this->belongsTo(Role::class,'role_id','id');
     }
+    public function registeredUsers()
+{
+    return $this->hasMany(EventRegistration::class, 'user_id');
+}
     // public function role_permission(){
     //     return $this->belongsTo(Role_Permissions::class,'user_id','id');
     // }

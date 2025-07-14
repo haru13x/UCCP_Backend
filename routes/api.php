@@ -22,34 +22,44 @@ use Illuminate\Support\Facades\Route;
 |
 */
 Route::middleware('auth.token')->group(function () {
+
 Route::get('/permissions', [PermissionController::class, 'index']);
 Route::post('/roles', [PermissionController::class, 'store']);
-
 Route::get('/get-roles', [RoleController::class, 'index']);
-
 Route::post('/update-roles/{id}', [RoleController::class, 'update']);
 Route::put('/roles/{id}', [PermissionController::class, 'update']);
-
 
 Route::get('/get-events', [EventController::class, 'index']);
 Route::post('/store-events', [EventController::class, 'store']);
 Route::post('/update-events', [EventController::class, 'update']);
-Route::post('event/register/{id}', [EventController::class, 'register']);
+Route::post('/event-registration/{id}', [EventController::class, 'eventRegisteration']);
+Route::get('/isregistered/{id}', [EventController::class, 'isRegistered']);
+Route::get('events-list/{type}', [EventController::class, 'list']);
+Route::get('my-events-list/{type}', [EventController::class, 'myEventList']);
+Route::post('get-event-registered/{id}', [EventController::class, 'getEventRegisteredUsers']);
+Route::post('event-registration-multiple', [EventController::class, 'eventMultipleRegisteration']);
+Route::post('mark-attend', [EventController::class, 'attendance']);
 
 
 Route::get('/dashboard/chart', [DashboardController::class, 'chart']);
 Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
 
-Route::get('/events/today', [EventController::class, 'today']);
-Route::get('/events/upcoming', [EventController::class, 'upcoming']);
-Route::get('/events/past', [EventController::class, 'past']);
+
+
 Route::get('/qrcodes/{eventId}', [QRCodeController::class, 'get']);
 Route::post('/qrcodes/generate/{eventId}', [QRCodeController::class, 'generate']);
 
+
 Route::get('/get-users', [UserController::class, 'index']);
+Route::post('/search-users', [UserController::class, 'searchUsers']);
+Route::post('/update-users', [UserController::class, 'update']);
 });
+
+
 Route::post("/register",[UserController::class,"register"]);
 Route::post("/login",[UserController::class,"login"]);
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
 });
+Route::get('/event-summary/{id}', [EventController::class, 'printSummary']);
+
