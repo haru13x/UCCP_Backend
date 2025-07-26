@@ -5,7 +5,7 @@ namespace App\Http\Middleware;
 use App\Models\User;
 use Closure;
 use Illuminate\Http\Request;
-
+use Illuminate\Support\Facades\Auth;
 class UserToken
 {
     /**
@@ -22,14 +22,14 @@ class UserToken
         if (!$token) {
             return response()->json(['error' => 'Unauthorized: No token provided' . $token], 401);
         }
-        $user = User::where('api_token', $token)->first();
+        $user = User::with('accountType')->where('api_token', $token)->first();
         if (!$user) {
             return response()->json(['error' => 'Unauthorized: Invalid token or insufficient permissions'], 401);
         }
 
         // Add the patient to the request
         $request->merge(['user' => $user]);
-
+        Auth::setUser($user);
         return $next($request);
     }
 }

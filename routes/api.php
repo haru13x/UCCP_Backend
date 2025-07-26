@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AccountGroupController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\MeetingController;
@@ -34,22 +35,27 @@ Route::post('/store-events', [EventController::class, 'store']);
 Route::post('/update-events', [EventController::class, 'update']);
 Route::post('/event-registration/{id}', [EventController::class, 'eventRegisteration']);
 Route::get('/isregistered/{id}', [EventController::class, 'isRegistered']);
-Route::get('events-list/{type}', [EventController::class, 'list']);
-Route::get('my-events-list/{type}', [EventController::class, 'myEventList']);
+
 Route::post('get-event-registered/{id}', [EventController::class, 'getEventRegisteredUsers']);
 Route::post('event-registration-multiple', [EventController::class, 'eventMultipleRegisteration']);
 Route::post('mark-attend', [EventController::class, 'attendance']);
+
 
 
 Route::get('/dashboard/chart', [DashboardController::class, 'chart']);
 Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
 
 
+Route::get('/account-groups', [AccountGroupController::class, 'getGroups']);
+Route::get('/account-types/{groupId}', [AccountGroupController::class, 'getTypesByGroup']);
 
 Route::get('/qrcodes/{eventId}', [QRCodeController::class, 'get']);
 Route::post('/qrcodes/generate/{eventId}', [QRCodeController::class, 'generate']);
 
-
+Route::get('/event-summary/{id}', [EventController::class, 'printSummary']);
+Route::post('events-list/{type}', [EventController::class, 'list']);
+Route::post('scan-event', [EventController::class, 'scanEvent']);
+Route::get('my-events-list/{type}', [EventController::class, 'myEventList']);
 Route::get('/get-users', [UserController::class, 'index']);
 Route::post('/search-users', [UserController::class, 'searchUsers']);
 Route::post('/update-users', [UserController::class, 'update']);
@@ -61,5 +67,4 @@ Route::post("/login",[UserController::class,"login"]);
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
 });
-Route::get('/event-summary/{id}', [EventController::class, 'printSummary']);
 
