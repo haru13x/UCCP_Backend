@@ -15,7 +15,7 @@ class UserController extends Controller
     // In UserController.php
     public function index()
     {
-        $users = User::get(); // Use ->get() instead of ->all()
+        $users = User::with('accountType')->get(); // Use ->get() instead of ->all()
         return response()->json($users, 200);
     }
     public function searchUsers(Request $request)
@@ -74,7 +74,7 @@ class UserController extends Controller
             DB::connection('mysql')->commit();
             return response()->json([
                 'message' => 'User registered successfully',
-                'user' => $user->load('details', 'role'),
+                'user' => $user->load('details', 'role','accountType'),
                 'api_token' => $apiToken,
             ], 201);
         } catch (\Exception $e) {
@@ -90,61 +90,111 @@ class UserController extends Controller
             'password' => 'required'
         ]);
 
-        $user = User::with('details', 'role')->where('email', $request->email)
+        $user = User::with('details', 'role','accountType')->where('email', $request->email)
         ->orWhere('username',$request->email)->first();
 
         if (!$user || !Hash::check($request->password, $user->password)) {
             return response()->json(['message' => 'Invalid email or password'], 401);
         }
 
-        // Generate token
-        $token = Str::random(60);
-        $user->api_token = $token;
-        $user->save();
+        // // Generate token
+        // $token = Str::random(60);
+        // $user->api_token = $token;
+        // $user->save();
 
         return response()->json([
             'message' => 'Login successful',
             'user' => $user,
-            'api_token' => $token
+            'api_token' => $user->api_token
         ]);
     }
 
     public function update(Request $request)
-    {
-        // Validate input
-        
+{
+    $request->validate([
+        'user_id' => 'required|exists:users,id',
+        'username' => 'required|string',
+        'email' => 'required|string',
+        'role' => 'required|exists:roles,id',
+        'firstName' => 'required|string',
+        'lastName' => 'required|string',
+        'accountGroupId' => 'nullable|integer',
+        'account_type_id' => 'array',
+        'account_type_id.*' => 'integer|exists:account_types,id',
+    ]);
+
+    DB::beginTransaction();
+    try {
         $user = User::findOrFail($request->user_id);
 
         // Update user basic info
         $user->update([
             'name' => $request->name ?? $user->name,
-            'username' => $request->username ?? $user->username,
-            'email' => $request->email ?? $user->email,
-            'role_id' => $request->role ?? $user->role_id,
+            'username' => $request->username,
+            'email' => $request->email,
+            'role_id' => $request->role,
         ]);
 
-        // If password is being updated
         if ($request->filled('password')) {
             $user->password = bcrypt($request->password);
             $user->save();
         }
 
-        // Update user_details (create if missing)
-        $details = $user->details ?: new UserDetails(['user_id' => $user->id]);
+        // Update or create user details
+        $details = $user->details ?: new \App\Models\UserDetails(['user_id' => $user->id]);
 
-        $details->first_name = $request->firstName ?? $details->first_name;
-        $details->middle_name = $request->middleName ?? $details->middle_name;
-        $details->last_name = $request->lastName ?? $details->last_name;
-        $details->birthdate = $request->birthdate ?? $details->birthdate;
-        $details->address = $request->address ?? $details->address;
-        $details->phone_number = $request->phone ?? $details->phone_number;
-        $details->sex_id = $request->gender ?? $details->sex_id;
-
+        $details->first_name = $request->firstName;
+        $details->middle_name = $request->middleName ?? '';
+        $details->last_name = $request->lastName;
+        $details->birthdate = $request->birthdate;
+        $details->address = $request->address;
+        $details->phone_number = $request->phone;
+        $details->sex_id = $request->gender;
         $details->save();
 
+        // ✅ Handle Account Types
+        $selectedAccountTypes = $request->account_type_id ?? [];
+
+        // Get existing account types for the user
+        $existingAccountTypes = \App\Models\UserAccountType::where('user_id', $user->id)->get();
+
+        $existingTypeIds = $existingAccountTypes->pluck('account_type_id')->toArray();
+
+        // Mark unchecked ones as inactive
+        foreach ($existingAccountTypes as $existing) {
+            if (!in_array($existing->account_type_id, $selectedAccountTypes)) {
+                $existing->update(['status' => 2]); // mark as inactive
+            } else {
+                $existing->update(['status' => 1]); // ensure active
+            }
+        }
+
+        // Add new ones that don't exist yet
+        foreach ($selectedAccountTypes as $typeId) {
+            if (!in_array($typeId, $existingTypeIds)) {
+                \App\Models\UserAccountType::create([
+                    'user_id' => $user->id,
+                    'account_type_id' => $typeId,
+                    'group_id' => $request->accountGroupId,
+                    'status' => 1,
+                    'created_by' => auth()->id() ?? 1,
+                ]);
+            }
+        }
+
+        DB::commit();
+
         return response()->json([
-            'message' => 'User updated successfully',
-            'user' => $user->fresh(),
+            'message' => 'User updated successfully.',
+            'user' => $user->fresh(['details', 'accountType']),
         ]);
+    } catch (\Exception $e) {
+        DB::rollBack();
+        return response()->json([
+            'message' => 'Failed to update user.',
+            'error' => $e->getMessage()
+        ], 500);
     }
+}
+
 }
