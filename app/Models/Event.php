@@ -13,7 +13,16 @@ class Event extends Model
     protected $guarded = [];
     // protected $with = ['eventMode.eventType'];
     protected $table = 'events';
- protected $appends = ['is_registered']; 
+ protected $appends = ['is_registered', 'is_attended'];
+
+    public function getIsAttendedAttribute()
+    {
+        $user = Auth::user();
+
+        if (!$user) return false;
+
+        return (int)$this->eventRegistrations()->where('user_id', $user->id)->where('is_attend', 1)->exists();
+    }
    public function getIsRegisteredAttribute()
     {
         $user = Auth::user();
