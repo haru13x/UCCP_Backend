@@ -5,7 +5,8 @@ namespace App\Http\Controllers;
 use App\Models\Event;
 use App\Models\EventMode;
 use App\Models\EventRegistration;
-
+use App\Models\Notification;
+use App\Models\UserAccountType;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -13,6 +14,7 @@ use Illuminate\Support\Facades\DB;
 use SimpleSoftwareIO\QrCode\Facades\QrCode;
 use Illuminate\Support\Facades\Storage;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Support\Facades\Http;
 
 class EventController extends Controller
 {
@@ -20,31 +22,103 @@ class EventController extends Controller
     public function scanEvent(Request $request)
     {
         $barcode = $request->barcode;
-        $event = Event::where('barcode', $barcode)->first();
+
+        $event = Event::where('barcode', $barcode)
+            ->with(['eventMode.eventType']) // eager load if needed
+            ->orderBy('start_date', 'desc')
+            ->first();
+
+        if (!$event) {
+            return response()->json([
+                'message' => 'No event found for this barcode.' . $barcode,
+                'type' => 2
+            ], 200);
+        }
+
+        // Get user's account types (e.g., ["student", "staff", ...])
+        $userAccountTypes = $request->user()->accountType->pluck('type')->toArray();
+
+        // Get event allowed types (e.g., ["student", "alumni", ...])
+        $eventAllowedTypes = $event->eventMode->pluck('account_type')->toArray();
+
+        // Check if there's any intersection
+        if (empty(array_intersect($userAccountTypes, $eventAllowedTypes))) {
+            return response()->json([
+                'message' => 'This event is not intended for your account type.',
+                'type' => 2,
+
+            ], 200);
+        }
+
+        // Append event_types for response
+        $event->event_types = $event->eventMode
+            ->pluck('eventType')
+            ->filter()
+            ->values();
+
         return response()->json($event, 200);
     }
 
+    public function cancelEvent($id)
+    {
+        $event = Event::find($id);
 
+        if (!$event) {
+            return response()->json(['message' => 'Event not found'], 404);
+        }
+
+        $event->status_id = 2; // Assuming 2 is the status for cancelled
+        $event->save();
+
+        return response()->json(['message' => 'Event cancelled successfully', 'event' => $event]);
+    }
     public function index(Request $request)
     {
+        $query = Event::query();
 
-        $events = Event::orderBy('start_date', 'desc')
-            ->get()
+        // Filter by status_id (e.g. 1 = active, 2 = cancelled)
+        if ($request->has('status_id')) {
+            $query->where('status_id', $request->status_id);
+        } else {
+            $query->where('status_id', 1); // Default to active events
+        }
+
+        // Date filter: today, past, upcoming
+        if ($request->has('date_filter')) {
+            $today = Carbon::today();
+
+            switch ($request->date_filter) {
+                case 'today':
+                    $query->whereDate('start_date', $today);
+                    break;
+                case 'past':
+                    $query->whereDate('start_date', '<', $today);
+                    break;
+                case 'upcoming':
+                    $query->whereDate('start_date', '>=', $today);
+                    break;
+            }
+        }
+
+        // Search by title
+        if ($request->has('search')) {
+            $query->where('title', 'like', '%' . $request->search . '%');
+        }
+
+        $events = $query->orderBy('start_date', 'desc')->get()
             ->map(function ($event) {
-                // Flatten event_types from eventMode
                 $eventTypes = $event->eventMode
                     ->pluck('eventType')
-                    ->filter() // remove nulls
+                    ->filter()
                     ->values();
 
-                // Add flattened event_types to event
                 $event->event_types = $eventTypes;
-
                 return $event;
             });
 
         return response()->json($events);
     }
+
 
     public function store(Request $request)
     {
@@ -108,6 +182,46 @@ class EventController extends Controller
                 ]);
             }
 
+            foreach ($validated['participants'] as $participantId) {
+                $users = UserAccountType::with('user')
+                    ->where('account_type_id', $participantId)
+                    ->where('status', 1)
+                    ->get();
+
+                foreach ($users as $userAccountType) {
+                    $user = $userAccountType->user;
+
+                    if (!empty($user->push_token)) {
+                        $title = '📅 New Event: ' . $validated['title'];
+                        $body = '📍 ' . ($validated['venue'] ?? 'Venue TBD') .
+                            ' | 🕒 ' . ($validated['start_time'] ?? '') .
+                            ' ' . ($validated['start_date'] ?? '');
+
+                        // Save notification to DB
+                        Notification::create([
+                            'user_id' => $user->id,
+                            'title' => $title,
+                            'body' => $body,
+                            'event_id' => $event->id,
+                            'type' => 'event',
+                        ]);
+
+                        // Send push notification
+                        $notificationData = [
+                            'to' => $user->push_token,
+                            'title' => $title,
+                            'body' => $body,
+                            'sound' => 'default',
+                            'data' => [
+                                'type' => 'event',
+                                'event_id' => $event->id,
+                            ],
+                        ];
+
+                        Http::post('https://exp.host/--/api/v2/push/send', $notificationData);
+                    }
+                }
+            }
 
             $qrController = new QRCodeController();
             $qrController->generate($event->id);
@@ -163,14 +277,12 @@ class EventController extends Controller
                 'category' => 'nullable|string',
                 'organizer' => 'nullable|string',
                 'contact' => 'nullable|string',
-
                 'venue' => 'nullable|string',
                 'address' => 'nullable|string',
                 'latitude' => 'nullable|numeric',
                 'longitude' => 'nullable|numeric',
                 'description' => 'nullable|string',
                 'image' => 'nullable|file|image|max:5048',
-
             ]);
 
             // Handle image upload if exists
@@ -262,6 +374,7 @@ class EventController extends Controller
             ]
         );
         return response()->json([
+            'status' => 'success',
             'message' => 'Event registration successful',
             'event' => $event,
         ], 200);
@@ -392,10 +505,29 @@ class EventController extends Controller
         return $query->with(['eventPrograms', 'eventsSponser'])->get();
     }
 
+    public function myCalendarList(Request $request)
+    {
+        $userId = $request->user->id;
+
+        $query = Event::whereHas('eventRegistrations', function ($q) use ($userId) {
+            $q->where('user_id', $userId);
+        });
+        $date = Carbon::parse($request->date)->format('Y-m-d');
+        if ($date) {
+
+            $query->whereDate('start_date', $date);
+        }
+
+
+
+
+        return $query->with(['eventPrograms', 'eventsSponser'])->get();
+    }
+
     public function attendance(Request $request)
     {
         $event = Event::with('eventRegistrations')->findOrFail($request->event_id);
-        $userId = $request->user_id;
+        $userId = $request->user_id ?? $request->user->id;
         // Check if the user is registered for the event
         $registration = $event->eventRegistrations()->where('user_id', $userId)->first();
 
@@ -436,5 +568,44 @@ class EventController extends Controller
 
         $pdf = Pdf::loadView('event-summary', $data);
         return $pdf->stream('event-summary.pdf');
+    }
+
+
+    public function generatePdf(Request $request)
+    {
+        $validated = $request->validate([
+            'fromDate' => 'required|date',
+            'toDate' => 'required|date',
+            'status' => 'required|in:1,2',
+            'organizerId' => 'nullable|integer',
+        ]);
+
+        $query = Event::with([
+            'eventRegistrations.details',
+            'eventsSponser',
+            'eventPrograms',
+            'eventMode.eventType'
+        ])
+            ->where(function ($q) use ($validated) {
+                // Find events where the range overlaps with fromDate and toDate
+                $q->whereDate('start_date', '<=', $validated['toDate'])
+                    ->whereDate('end_date', '>=', $validated['fromDate']);
+            })
+            ->where('status_id', $validated['status']);
+
+        if (!empty($validated['organizerId'])) {
+            $query->where('organizer_id', $validated['organizerId']);
+        }
+
+        $events = $query->orderBy('start_date')->get();
+
+
+        $pdf = PDF::loadView('reports.event', [
+            'events' => $events,
+            'fromDate' => $validated['fromDate'],
+            'toDate' => $validated['toDate']
+        ]);
+
+        return $pdf->download('event_report.pdf');
     }
 }

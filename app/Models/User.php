@@ -26,9 +26,14 @@ class User extends Authenticatable // ✅
     {
         return $this->hasMany(EventRegistration::class, 'user_id');
     }
+   
     public function accountType(){
         return $this->hasMany(UserAccountType::class,'user_id', 'id')
         ->where('status',1);
+    }
+    public function notifications()
+    {
+        return $this->hasMany(Notification::class, 'user_id', 'id');
     }
     // public function role_permission(){
     //     return $this->belongsTo(Role_Permissions::class,'user_id','id');

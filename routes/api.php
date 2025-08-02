@@ -26,11 +26,11 @@ Route::middleware('auth.token')->group(function () {
 
 Route::get('/permissions', [PermissionController::class, 'index']);
 Route::post('/roles', [PermissionController::class, 'store']);
-Route::get('/get-roles', [RoleController::class, 'index']);
+
 Route::post('/update-roles/{id}', [RoleController::class, 'update']);
 Route::put('/roles/{id}', [PermissionController::class, 'update']);
 
-Route::get('/get-events', [EventController::class, 'index']);
+Route::post('/get-events', [EventController::class, 'index']);
 Route::post('/store-events', [EventController::class, 'store']);
 Route::post('/update-events', [EventController::class, 'update']);
 Route::post('/event-registration/{id}', [EventController::class, 'eventRegisteration']);
@@ -48,6 +48,7 @@ Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
 
 Route::get('/account-groups', [AccountGroupController::class, 'getGroups']);
 Route::get('/account-types/{groupId}', [AccountGroupController::class, 'getTypesByGroup']);
+Route::post('/upload-users', [UserController::class, 'uploadUsers']);
 
 Route::get('/qrcodes/{eventId}', [QRCodeController::class, 'get']);
 Route::post('/qrcodes/generate/{eventId}', [QRCodeController::class, 'generate']);
@@ -56,14 +57,26 @@ Route::get('/event-summary/{id}', [EventController::class, 'printSummary']);
 Route::post('events-list/{type}', [EventController::class, 'list']);
 Route::post('scan-event', [EventController::class, 'scanEvent']);
 Route::get('my-events-list/{type}', [EventController::class, 'myEventList']);
-Route::get('/get-users', [UserController::class, 'index']);
+Route::put('/cancel-event/{id}', [EventController::class, 'cancelEvent']);
+Route::post('myCalendarList', [EventController::class, 'myCalendarList']);
+// routes/api.php
+Route::post('/generate-event-report', [EventController::class, 'generatePdf']);
+
+
+Route::post('/approve-request/{id}', [UserController::class, 'approveRequest']);
+Route::post('/get-users', [UserController::class, 'index']);
 Route::post('/search-users', [UserController::class, 'searchUsers']);
+Route::post('/request-registration', [UserController::class, 'requestRegistration']);
 Route::post('/update-users', [UserController::class, 'update']);
 });
+Route::get('/account-groups', [AccountGroupController::class, 'getGroups']);
+Route::get('/account-types/{groupId}', [AccountGroupController::class, 'getTypesByGroup']);
+Route::get('/get-roles', [RoleController::class, 'index']);
 
-
-Route::post("/register",[UserController::class,"register"]);
+     
 Route::post("/login",[UserController::class,"login"]);
+     
+Route::post("/register",[UserController::class,"register"]);
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
 });
