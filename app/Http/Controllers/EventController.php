@@ -6,6 +6,7 @@ use App\Models\Event;
 use App\Models\EventMode;
 use App\Models\EventRegistration;
 use App\Models\Notification;
+use App\Models\Review;
 use App\Models\UserAccountType;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -59,17 +60,22 @@ class EventController extends Controller
         return response()->json($event, 200);
     }
 
-    public function cancelEvent($id)
+    public function cancelEvent(Request $request , $id)
     {
         $event = Event::find($id);
-
+     
         if (!$event) {
             return response()->json(['message' => 'Event not found'], 404);
         }
-
-        $event->status_id = 2; // Assuming 2 is the status for cancelled
+        $user = Auth::user();
+        $event->status_id = 2;
+        $event->cancel_reason = $request->reason ?? '';
+        $event->cancel_date = Carbon::now();
+        $event->cancel_by = $user->name ?? ''; // Assuming 2 is the status for cancelled
         $event->save();
-
+        // Optionally, you can also update related registrations
+        EventRegistration::where('event_id', $id)
+            ->update(['statusId' => 2]); // Assuming 2 is the status for cancelled
         return response()->json(['message' => 'Event cancelled successfully', 'event' => $event]);
     }
     public function index(Request $request)
@@ -118,7 +124,7 @@ class EventController extends Controller
 
         return response()->json($events);
     }
-
+    
 
     public function store(Request $request)
     {
@@ -182,7 +188,7 @@ class EventController extends Controller
                 ]);
             }
 
-            foreach ($validated['participants'] as $participantId) {
+            foreach ($participants as $participantId) {
                 $users = UserAccountType::with('user')
                     ->where('account_type_id', $participantId)
                     ->where('status', 1)
@@ -454,7 +460,7 @@ class EventController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        if ($user->role_id != 1) {
+        // if ($user->role_id != 1) {
             $userAccountTypeIds = $user->accountType->pluck('account_type_id');
 
             $events = Event::whereHas('eventMode', function ($query) use ($userAccountTypeIds) {
@@ -463,9 +469,9 @@ class EventController extends Controller
                 ->whereDoesntHave('eventRegistrations', function ($q) use ($userId) {
                     $q->where('user_id', $userId); // 👈 excludes events already registered by user
                 });
-        } else {
-            $events = Event::query();
-        }
+        // } else {
+        //     $events = Event::query();
+        // }
 
         if ($request->has('search')) {
             $search = $request->search;
@@ -480,7 +486,19 @@ class EventController extends Controller
             $events->whereDate('start_date', '<', Carbon::today());
         }
 
-        return $events->with('eventMode')->get();
+         $event = $events->orderBy('start_date', 'desc')->get()
+            ->map(function ($event) {
+                $eventTypes = $event->eventMode
+                    ->pluck('eventType')
+                    ->filter()
+                    ->values();
+
+                $event->event_types = $eventTypes;
+                return $event;
+            });
+
+        return response()->json($event, 200);
+
     }
 
     public function myEventList(Request $request, $type)
@@ -502,7 +520,19 @@ class EventController extends Controller
             return response()->json(['error' => 'Invalid type'], 400);
         }
 
-        return $query->with(['eventPrograms', 'eventsSponser'])->get();
+       
+         $event = $query->orderBy('start_date', 'desc')->get()
+            ->map(function ($event) {
+                $eventTypes = $event->eventMode
+                    ->pluck('eventType')
+                    ->filter()
+                    ->values();
+
+                $event->event_types = $eventTypes;
+                return $event;
+            });
+
+        return response()->json($event, 200);;
     }
 
     public function myCalendarList(Request $request)
@@ -607,5 +637,121 @@ class EventController extends Controller
         ]);
 
         return $pdf->download('event_report.pdf');
+    }
+
+    public function submitReview(Request $request, $eventId)
+    {
+        try {
+            DB::beginTransaction();
+
+            $user = Auth::user();
+
+            if (!$user) {
+                return response()->json(['message' => 'Unauthorized'], 401);
+            }
+
+            // Validate request
+            $validated = $request->validate([
+                'rating' => 'nullable|integer|between:1,5',
+                'comment' => 'nullable|string|max:1000',
+            ]);
+
+            // Check if event exists
+            $event = Event::find($eventId);
+            if (!$event) {
+                return response()->json(['message' => 'Event not found'], 404);
+            }
+
+            // Check if user is registered for the event
+            $isRegistered = $event->eventRegistrations()
+                ->where('user_id', $user->id)
+                ->exists();
+
+            if (!$isRegistered) {
+                return response()->json(['message' => 'You must be registered to review this event'], 403);
+            }
+
+            $review = Review::create([
+                'event_id' => $eventId,
+                'user_id' => $user->id,
+                'rating' => $validated['rating'],
+                'comment' => $validated['comment'],
+            ]);
+
+            return response()->json([
+                'message' => 'Review submitted successfully',
+                'review' => $review
+            ], 201);
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'Database transaction failed: ' . $e->getMessage()], 500);
+        } finally {
+            DB::commit();
+        }
+    }
+
+    public function getReviews($eventId)
+    {
+        try {
+            $reviews = Review::where('event_id', $eventId)
+                ->with('user:id,name') // assuming you have a User relationship
+                ->select('id', 'user_id', 'rating', 'comment', 'created_at')
+                ->latest()
+                ->get()
+                ->map(function ($review) {
+                    return [
+                        'id' => $review->id,
+                        'name' => $review->user?->name ?? 'Anonymous',
+                        'rating' => $review->rating,
+                        'text' => $review->comment,
+                        'is_mine' => $review->user?->id === auth()->id(),
+                        'created_at' => $review->created_at,
+                    ];
+                });
+
+            return response()->json(['reviews' => $reviews], 200);
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'Failed to fetch reviews: ' . $e->getMessage()], 500);
+            //throw $th;
+        }
+    }
+
+    public function updateReview(Request $request, $eventId)
+    {
+        $user = Auth::user();
+        $event = Event::findOrFail($eventId);
+
+        // Validate the user is registered
+        if (!$event->eventRegistrations()->where('user_id', $user->id)->exists()) {
+            return response()->json([
+                'message' => 'You must be registered to review this event.'
+            ], 403);
+        }
+
+        // Find the user's review for this event
+        $review = Review::where('user_id', $user->id)
+            ->where('event_id', $eventId)
+            ->first();
+             if (!$review) {
+            return response()->json([
+                'message' => 'You have not reviewed this event yet.'
+            ], 404);
+        }
+
+        // Validate input
+        $request->validate([
+            'rating' => 'required|integer|between:1,5',
+            'comment' => 'required|string|max:1000',
+        ]);
+
+        // Update review
+        $review->update([
+            'rating' => $request->rating,
+            'comment' => $request->comment,
+        ]);
+
+           return response()->json([
+            'message' => 'Review updated successfully!',
+            'review' => $review->fresh()->load('user:id,name'),
+        ], 200);
     }
 }

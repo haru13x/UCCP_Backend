@@ -13,7 +13,7 @@ class Event extends Model
     protected $guarded = [];
     // protected $with = ['eventMode.eventType'];
     protected $table = 'events';
- protected $appends = ['is_registered', 'is_attended'];
+    protected $appends = ['is_registered', 'is_attended'];
 
     public function getIsAttendedAttribute()
     {
@@ -23,7 +23,7 @@ class Event extends Model
 
         return (int)$this->eventRegistrations()->where('user_id', $user->id)->where('is_attend', 1)->exists();
     }
-   public function getIsRegisteredAttribute()
+    public function getIsRegisteredAttribute()
     {
         $user = Auth::user();
 
@@ -43,9 +43,13 @@ class Event extends Model
     {
         return $this->hasMany(EventRegistration::class);
     }
-    public function eventMode(){
-        return $this->hasMany(EventMode::class,'event_id', 'id')
-        ->where('status_id',1);
+    public function eventMode()
+    {
+        return $this->hasMany(EventMode::class, 'event_id', 'id')
+            ->where('status_id', 1);
     }
-   
+    public function reviews()
+    {
+        return $this->hasMany(Review::class, 'event_id', 'id');
+    }
 }

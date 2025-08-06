@@ -18,6 +18,24 @@ use Maatwebsite\Excel\Facades\Excel;
 class UserController extends Controller
 {
     // In UserController.php
+    public function updateStatus(Request $request)
+    {
+        $id = $request->user_id ?? '';
+        $status = $request->status;
+        $message = $status == 1 ? 'Enable' : 'Disbaled';
+        $user = User::where('id', $id)->first();
+        if (!$user) {
+            return response()->json(['msg' => 'User Not Found'], 500);
+        }
+        if ($status) {
+            $user->where('id', $id)->update([
+                'status_id' => $status
+            ]);
+        }
+        return response()->json('Successfully '.$message .'User',200);
+    }
+
+
     public function index(Request $request)
     {
         $query = User::where('is_request', 0);
@@ -33,7 +51,7 @@ class UserController extends Controller
                     });
             });
         }
-        $users = $query->with('accountType')->orderBy('name','asc')->get(); // Use ->get() instead of ->all()
+        $users = $query->with('accountType')->orderBy('name', 'asc')->get(); // Use ->get() instead of ->all()
         return response()->json($users, 200);
     }
     public function approveRequest($id)
@@ -167,6 +185,7 @@ class UserController extends Controller
 
     public function searchUsers(Request $request)
     {
+
         $search = $request->search ?? $request->query('search');
         $eventId = $request->event_id ?? $request->query('event_id');
         $users = User::where('is_request', 0)->with(['details', 'registeredUsers' => function ($q) use ($eventId) {
@@ -288,11 +307,11 @@ class UserController extends Controller
         }
 
         // Generate token
-        if( !$user->api_token) {
+        if (!$user->api_token) {
             $user->api_token = Str::random(60);
             $user->save();
         }
-         return response()->json([
+        return response()->json([
             'message' => 'Login successful',
             'user' => $user,
             'api_token' => $user->api_token
