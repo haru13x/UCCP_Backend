@@ -16,6 +16,7 @@ use SimpleSoftwareIO\QrCode\Facades\QrCode;
 use Illuminate\Support\Facades\Storage;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\Http;
+use QuickChart;
 
 class EventController extends Controller
 {
@@ -60,10 +61,10 @@ class EventController extends Controller
         return response()->json($event, 200);
     }
 
-    public function cancelEvent(Request $request , $id)
+    public function cancelEvent(Request $request, $id)
     {
         $event = Event::find($id);
-     
+
         if (!$event) {
             return response()->json(['message' => 'Event not found'], 404);
         }
@@ -124,7 +125,23 @@ class EventController extends Controller
 
         return response()->json($events);
     }
-    
+
+    public function getEvent($id)
+    {
+        $query = Event::query();
+        $event = $query->where('id', $id)
+            ->orderBy('start_date', 'desc')->get()
+            ->map(function ($event) {
+                $eventTypes = $event->eventMode
+                    ->pluck('eventType')
+                    ->filter()
+                    ->values();
+
+                $event->event_types = $eventTypes;
+                return $event;
+            })->first();
+        return response()->json($event, 200);
+    }
 
     public function store(Request $request)
     {
@@ -188,6 +205,8 @@ class EventController extends Controller
                 ]);
             }
 
+            $processedUserIds = []; // Store user IDs that we've already notified
+
             foreach ($participants as $participantId) {
                 $users = UserAccountType::with('user')
                     ->where('account_type_id', $participantId)
@@ -197,37 +216,44 @@ class EventController extends Controller
                 foreach ($users as $userAccountType) {
                     $user = $userAccountType->user;
 
-                    if (!empty($user->push_token)) {
-                        $title = '📅 New Event: ' . $validated['title'];
-                        $body = '📍 ' . ($validated['venue'] ?? 'Venue TBD') .
-                            ' | 🕒 ' . ($validated['start_time'] ?? '') .
-                            ' ' . ($validated['start_date'] ?? '');
-
-                        // Save notification to DB
-                        Notification::create([
-                            'user_id' => $user->id,
-                            'title' => $title,
-                            'body' => $body,
-                            'event_id' => $event->id,
-                            'type' => 'event',
-                        ]);
-
-                        // Send push notification
-                        $notificationData = [
-                            'to' => $user->push_token,
-                            'title' => $title,
-                            'body' => $body,
-                            'sound' => 'default',
-                            'data' => [
-                                'type' => 'event',
-                                'event_id' => $event->id,
-                            ],
-                        ];
-
-                        Http::post('https://exp.host/--/api/v2/push/send', $notificationData);
+                    // Skip if this user was already processed
+                    if (in_array($user->id, $processedUserIds)) {
+                        continue;
                     }
+
+                    $title = '📅 New Event: ' . $validated['title'];
+                    $body = '📍 ' . ($validated['venue'] ?? 'Venue TBD') .
+                        ' | 🕒 ' . ($validated['start_time'] ?? '') .
+                        ' ' . ($validated['start_date'] ?? '');
+
+                    // Save notification to DB
+                    Notification::create([
+                        'user_id' => $user->id,
+                        'title' => $title,
+                        'body' => $body,
+                        'event_id' => $event->id,
+                        'type' => 'created',
+                    ]);
+
+                    // Send push notification
+                    $notificationData = [
+                        'to' => $user->push_token,
+                        'title' => $title,
+                        'body' => $body,
+                        'sound' => 'default',
+                        'data' => [
+                            'type' => 'event',
+                            'event_id' => $event->id,
+                        ],
+                    ];
+
+                    // Http::post('https://exp.host/--/api/v2/push/send', $notificationData);
+
+                    // Mark this user as processed
+                    $processedUserIds[] = $user->id;
                 }
             }
+
 
             $qrController = new QRCodeController();
             $qrController->generate($event->id);
@@ -285,8 +311,8 @@ class EventController extends Controller
                 'contact' => 'nullable|string',
                 'venue' => 'nullable|string',
                 'address' => 'nullable|string',
-                'latitude' => 'nullable|numeric',
-                'longitude' => 'nullable|numeric',
+                'latitude',
+                'longitude',
                 'description' => 'nullable|string',
                 'image' => 'nullable|file|image|max:5048',
             ]);
@@ -345,6 +371,53 @@ class EventController extends Controller
                         'created_by' => auth()->id() ?? 1,
                         'created_at' => now(),
                     ]);
+                }
+            }
+            $processedUserIds = [];
+            foreach ($participantIds as $participantId) {
+                $users = UserAccountType::with('user')
+                    ->where('account_type_id', $participantId)
+                    ->where('status', 1)
+                    ->get();
+
+                foreach ($users as $userAccountType) {
+                    $user = $userAccountType->user;
+
+                    // Skip if this user was already processed
+                    if (in_array($user->id, $processedUserIds)) {
+                        continue;
+                    }
+
+                    $title = '📅 Updated: ' . $validated['title'];
+                    $body = '📍 ' . ($validated['venue'] ?? 'Venue TBD') .
+                        ' | 🕒 ' . ($validated['start_time'] ?? '') .
+                        ' ' . ($validated['start_date'] ?? '');
+
+                    // Save notification to DB
+                    Notification::create([
+                        'user_id' => $user->id,
+                        'title' => $title,
+                        'body' => $body,
+                        'event_id' => $event->id,
+                        'type' => 'created',
+                    ]);
+
+                    // Send push notification
+                    $notificationData = [
+                        'to' => $user->push_token,
+                        'title' => $title,
+                        'body' => $body,
+                        'sound' => 'default',
+                        'data' => [
+                            'type' => 'event',
+                            'event_id' => $event->id,
+                        ],
+                    ];
+
+                    // Http::post('https://exp.host/--/api/v2/push/send', $notificationData);
+
+                    // Mark this user as processed
+                    $processedUserIds[] = $user->id;
                 }
             }
 
@@ -460,7 +533,7 @@ class EventController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        // if ($user->role_id != 1) {
+        if ($user->role_id != 1) {
             $userAccountTypeIds = $user->accountType->pluck('account_type_id');
 
             $events = Event::whereHas('eventMode', function ($query) use ($userAccountTypeIds) {
@@ -469,9 +542,12 @@ class EventController extends Controller
                 ->whereDoesntHave('eventRegistrations', function ($q) use ($userId) {
                     $q->where('user_id', $userId); // 👈 excludes events already registered by user
                 });
-        // } else {
-        //     $events = Event::query();
-        // }
+        } else {
+            $events = Event::query();
+            $events->whereDoesntHave('eventRegistrations', function ($q) use ($userId) {
+                $q->where('user_id', $userId); // 👈 excludes events already registered by user
+            });
+        }
 
         if ($request->has('search')) {
             $search = $request->search;
@@ -486,7 +562,7 @@ class EventController extends Controller
             $events->whereDate('start_date', '<', Carbon::today());
         }
 
-         $event = $events->orderBy('start_date', 'desc')->get()
+        $event = $events->orderBy('start_date', 'desc')->get()
             ->map(function ($event) {
                 $eventTypes = $event->eventMode
                     ->pluck('eventType')
@@ -498,7 +574,6 @@ class EventController extends Controller
             });
 
         return response()->json($event, 200);
-
     }
 
     public function myEventList(Request $request, $type)
@@ -520,8 +595,8 @@ class EventController extends Controller
             return response()->json(['error' => 'Invalid type'], 400);
         }
 
-       
-         $event = $query->orderBy('start_date', 'desc')->get()
+
+        $event = $query->orderBy('start_date', 'desc')->get()
             ->map(function ($event) {
                 $eventTypes = $event->eventMode
                     ->pluck('eventType')
@@ -599,13 +674,11 @@ class EventController extends Controller
         $pdf = Pdf::loadView('event-summary', $data);
         return $pdf->stream('event-summary.pdf');
     }
-
-
     public function generatePdf(Request $request)
     {
         $validated = $request->validate([
             'fromDate' => 'required|date',
-            'toDate' => 'required|date',
+            'toDate' => 'required|date|after_or_equal:fromDate',
             'status' => 'required|in:1,2',
             'organizerId' => 'nullable|integer',
         ]);
@@ -617,27 +690,166 @@ class EventController extends Controller
             'eventMode.eventType'
         ])
             ->where(function ($q) use ($validated) {
-                // Find events where the range overlaps with fromDate and toDate
                 $q->whereDate('start_date', '<=', $validated['toDate'])
                     ->whereDate('end_date', '>=', $validated['fromDate']);
             })
             ->where('status_id', $validated['status']);
 
-        if (!empty($validated['organizerId'])) {
-            $query->where('organizer_id', $validated['organizerId']);
+        if ($validated['organizerId']) {
+            $query->where('organizer', $validated['organizerId']);
         }
 
         $events = $query->orderBy('start_date')->get();
 
+        // Generate dynamic stats and charts
+        $eventData = [];
 
-        $pdf = PDF::loadView('reports.event', [
+        foreach ($events as $event) {
+            $registered = $event->eventRegistrations()->count();
+
+            // Count attendees (is_attend = 1)
+            $attended = $event->eventRegistrations()->where('is_attend', 1)->count();
+            $notAttended = $registered - $attended;
+
+            // Count male & female based on user details -> gender_id
+            $maleCount = $event->eventRegistrations()
+                ->whereHas('details', function ($q) {
+                    $q->where('sex_id', 1); // 1 = male
+                })
+                ->count();
+
+            $femaleCount = $event->eventRegistrations()
+                ->whereHas('details', function ($q) {
+                    $q->where('sex_id', 2); // 2 = female
+                })
+                ->count();
+            // Gender chart
+            $genderChartUrl = "https://quickchart.io/chart?c=" . urlencode(json_encode([
+                'type' => 'pie',
+                'data' => [
+                    'labels' => ['Male', 'Female'],
+                    'datasets' => [[
+                        'data' => [$maleCount, $femaleCount],
+                        'backgroundColor' => [
+                            '#3B82F6', // Tailwind blue-500
+                            '#EF4444', // Tailwind red-500
+                        ],
+                    ]],
+                ],
+                'options' => [
+                    'plugins' => [
+                        'legend' => ['position' => 'bottom'],
+                    ],
+                    'responsive' => true,
+                ],
+            ]));
+
+            // Attendance chart
+            $attendanceChartUrl = "https://quickchart.io/chart?c=" . urlencode(json_encode([
+                'type' => 'bar',
+                'data' => [
+                    'labels' => ['Participants'],
+                    'datasets' => [
+                        [
+                            'label' => 'Registered',
+                            'data' => [$registered],
+                            'backgroundColor' => '#10B981' // emerald-500
+                        ],
+                        [
+                            'label' => 'Attended',
+                            'data' => [$attended],
+                            'backgroundColor' => '#4010b9' // purple-ish
+                        ],
+                        [
+                            'label' => 'Not Attended',
+                            'data' => [$notAttended],
+                            'backgroundColor' => '#F43F5E' // rose-500
+                        ]
+                    ],
+                ],
+                'options' => [
+                    'scales' => [
+                        'y' => [
+                            'min' => 0,
+                            'beginAtZero' => true,
+                            'ticks' => ['stepSize' => 5]
+                        ]
+                    ],
+                    'plugins' => [
+                        'legend' => [
+                            'display' => true,
+                            'position' => 'top'
+                        ],
+                        'datalabels' => [
+                            'anchor' => 'end',
+                            'align' => 'bottom',
+                            'color' => '#000',
+                            'font' => [
+                                'weight' => 'bold',
+                                'size' => 12
+                            ]
+                        ]
+                    ]
+                ],
+                'plugins' => ['https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels']
+            ]));
+
+
+            $eventData[$event->id] = compact('genderChartUrl', 'attendanceChartUrl', 'registered', 'attended', 'notAttended', 'maleCount', 'femaleCount');
+        }
+
+        $pdf = PDF::setOptions([
+            'isHtml5ParserEnabled' => true,
+            'isRemoteEnabled' => true,
+        ])->loadView('charts_pdf', [
             'events' => $events,
+            'eventData' => $eventData,
             'fromDate' => $validated['fromDate'],
-            'toDate' => $validated['toDate']
-        ]);
+            'toDate' => $validated['toDate'],
+        ])->setPaper('a4', 'portrait');
 
-        return $pdf->download('event_report.pdf');
+        return $pdf->download('event_report_' . now()->format('Y-m-d') . '.pdf');
     }
+
+
+
+    // public function generatePdf(Request $request)
+    //     {
+    //         $validated = $request->validate([
+    //             'fromDate' => 'required|date',
+    //             'toDate' => 'required|date',
+    //             'status' => 'required|in:1,2',
+    //             'organizerId' => 'nullable|integer',
+    //         ]);
+
+    //         $query = Event::with([
+    //             'eventRegistrations.details',
+    //             'eventsSponser',
+    //             'eventPrograms',
+    //             'eventMode.eventType'
+    //         ])
+    //             ->where(function ($q) use ($validated) {
+    //                 // Find events where the range overlaps with fromDate and toDate
+    //                 $q->whereDate('start_date', '<=', $validated['toDate'])
+    //                     ->whereDate('end_date', '>=', $validated['fromDate']);
+    //             })
+    //             ->where('status_id', $validated['status']);
+
+    //         if (!empty($validated['organizerId'])) {
+    //             $query->where('organizer_id', $validated['organizerId']);
+    //         }
+
+    //         $events = $query->orderBy('start_date')->get();
+
+
+    //         $pdf = PDF::loadView('chard_pdf', [
+    //             'events' => $events,
+    //             'fromDate' => $validated['fromDate'],
+    //             'toDate' => $validated['toDate']
+    //         ]);
+
+    //         return $pdf->download('event_report.pdf');
+    //     }
 
     public function submitReview(Request $request, $eventId)
     {
@@ -719,7 +931,7 @@ class EventController extends Controller
     {
         $user = Auth::user();
         $event = Event::findOrFail($eventId);
-
+        $reviewId = $request->reviewId;
         // Validate the user is registered
         if (!$event->eventRegistrations()->where('user_id', $user->id)->exists()) {
             return response()->json([
@@ -729,9 +941,11 @@ class EventController extends Controller
 
         // Find the user's review for this event
         $review = Review::where('user_id', $user->id)
+            ->where('id', $reviewId)
             ->where('event_id', $eventId)
             ->first();
-             if (!$review) {
+
+        if (!$review) {
             return response()->json([
                 'message' => 'You have not reviewed this event yet.'
             ], 404);
@@ -739,19 +953,37 @@ class EventController extends Controller
 
         // Validate input
         $request->validate([
-            'rating' => 'required|integer|between:1,5',
+            'rating' => 'nullable|integer|between:1,5',
             'comment' => 'required|string|max:1000',
         ]);
 
         // Update review
-        $review->update([
+        $review->where('id', $reviewId)->update([
             'rating' => $request->rating,
             'comment' => $request->comment,
         ]);
 
-           return response()->json([
+        return response()->json([
             'message' => 'Review updated successfully!',
-            'review' => $review->fresh()->load('user:id,name'),
+            'review' => $review,
         ], 200);
+    }
+    public function getNewNotifications(Request $request)
+    {
+        $user = $request->user(); // assuming auth
+
+        $notification = Notification::where('user_id', $user->id)
+            ->where('is_notify', 0)
+            ->orderBy('created_at', 'asc')
+            ->first();
+
+        if ($notification) {
+            $notification->update(['is_notify' => 1]);
+        }
+
+        return response()->json([
+            'status' => true,
+            'data' => $notification ? [$notification] : []
+        ]);
     }
 }

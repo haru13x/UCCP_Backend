@@ -37,7 +37,7 @@ Route::middleware('auth.token')->group(function () {
     Route::post('/update-events', [EventController::class, 'update']);
     Route::post('/event-registration/{id}', [EventController::class, 'eventRegisteration']);
     Route::get('/isregistered/{id}', [EventController::class, 'isRegistered']);
-
+    Route::get('get-organizer',[UserController::class ,'getOrganizer']);
     Route::post('get-event-registered/{id}', [EventController::class, 'getEventRegisteredUsers']);
     Route::post('event-registration-multiple', [EventController::class, 'eventMultipleRegisteration']);
     Route::post('mark-attend', [EventController::class, 'attendance']);
@@ -62,8 +62,9 @@ Route::middleware('auth.token')->group(function () {
     Route::post('myCalendarList', [EventController::class, 'myCalendarList']);
     // routes/api.php
     Route::post('/generate-event-report', [EventController::class, 'generatePdf']);
+        Route::get('/notifications/new', [EventController::class, 'getNewNotifications']);
     Route::get('/events/{eventId}/reviews', [EventController::class, 'getReviews']);
-    Route::post('/events/{eventId}/review', [EventController::class, 'submitReview']);
+        Route::get('/events/{eventId}/reviews', [EventController::class, 'getReviews']);
     Route::put('events/{eventId}/review', [EventController::class, 'updateReview']);   // PUT: Update
     Route::post('/approve-request/{id}', [UserController::class, 'approveRequest']);
     Route::post('/get-users', [UserController::class, 'index']);
@@ -71,6 +72,8 @@ Route::middleware('auth.token')->group(function () {
     Route::post('/request-registration', [UserController::class, 'requestRegistration']);
     Route::post('/update-users', [UserController::class, 'update']);
       Route::post('/update-user-status', [UserController::class, 'updateStatus']);
+    Route::get('/get-event/{eventId}', [EventController::class, 'getEvent']);
+
 });
 Route::get('/account-groups', [AccountGroupController::class, 'getGroups']);
 Route::get('/account-types/{groupId}', [AccountGroupController::class, 'getTypesByGroup']);
@@ -87,3 +90,4 @@ Route::post('reset-password', [ForgotPasswordController::class, 'resetPassword']
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
 });
+    Route::get('/generate-event-reports', [EventController::class, 'generatePdf']);

@@ -19,7 +19,7 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['*'],
+    'allowed_origins' => ['*', 'https://7p9svr84-3000.asse.devtunnels.ms',],
 
     'allowed_origins_patterns' => [],
 

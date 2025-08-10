@@ -32,7 +32,7 @@ class UserController extends Controller
                 'status_id' => $status
             ]);
         }
-        return response()->json('Successfully '.$message .'User',200);
+        return response()->json('Successfully ' . $message . 'User', 200);
     }
 
 
@@ -216,14 +216,16 @@ class UserController extends Controller
             if ($request->is_request === 1) {
                 $apiToken = null;
                 $status_id = 0;
+                $name =  $request->last_name . ' ' . $request->first_name;
             } else {
                 $apiToken = Str::random(60); // Generate 60-char token
                 $status_id = 1;
+                $name = $request->lastName . ' ' . $request->firstName;
             }
-            $name = $request->last_name ?? $request->lastName . $request->first_name ?? $request->firstName;
+
             $user = User::create([
                 'username' => $request->username ?? $request->email, // Use email as username if not provided
-                'name' => $name,
+                'name' =>  $name,
                 'email' => $request->email,
                 'password' => Hash::make($request->password),
                 'api_token' => $apiToken,
@@ -267,7 +269,7 @@ class UserController extends Controller
                     \App\Models\UserAccountType::create([
                         'user_id' => $user->id,
                         'account_type_id' => $typeId,
-                        'group_id' => $request->account_group_id,
+                        'group_id' => $request->account_group_id ?? $request->accountGroupId,
                         'status' => 1,
                         'created_by' => auth()->id() ?? 1,
                     ]);
@@ -293,13 +295,17 @@ class UserController extends Controller
             'password' => 'required'
         ]);
 
-        $user = User::where('is_request', 0)->with('details', 'role', 'accountType')->where('email', $request->email)
-            ->orWhere('username', $request->email)->first();
+        $user = User::where('email', $request->email)
+            ->orWhere('username', $request->email)
+            ->where('is_request', 0)->with('details', 'role', 'accountType')->first();
         if ($user->is_request == 1) {
             return response()->json(['msg' => 'User is not confirm please contact the admin'], 201);
         }
         if ($user->status_id == 0) {
             return response()->json(['msg' => 'This User is Inactive Please contact the Admin'], 201);
+        }
+        if ($user->status_id != 1) {
+            return response()->json(['msg' => 'This User is Inactive ,  Please contact the Admin'], 201);
         }
 
         if (!$user || !Hash::check($request->password, $user->password)) {
@@ -335,10 +341,11 @@ class UserController extends Controller
         DB::beginTransaction();
         try {
             $user = User::findOrFail($request->user_id);
+            $details = $user->details ?: new \App\Models\UserDetails(['user_id' => $user->id]);
 
             // Update user basic info
             $user->update([
-                'name' => $request->name ?? $user->name,
+                'name' =>  $request->lastName . ' ' .  $request->firstName ?? $user->name,
                 'username' => $request->username,
                 'email' => $request->email,
                 'role_id' => $request->role,
@@ -350,7 +357,6 @@ class UserController extends Controller
             }
 
             // Update or create user details
-            $details = $user->details ?: new \App\Models\UserDetails(['user_id' => $user->id]);
 
             $details->first_name = $request->firstName;
             $details->middle_name = $request->middleName ?? '';
@@ -404,5 +410,12 @@ class UserController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    public function getOrganizer()
+    {
+        $user = User::where('role_id', 2)->where('status_id', 1)
+            ->get();
+        return response()->json($user, 200);
     }
 }
