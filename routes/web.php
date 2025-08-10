@@ -18,4 +18,4 @@ Route::get('/', function () {
     return view('welcome');
 });
 Route::get('/event-summary/{id}', [EventController::class, 'printSummary']);
-   
+       Route::get('/generate-event-reports', [EventController::class, 'generatePdf']);
