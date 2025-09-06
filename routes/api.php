@@ -1,13 +1,16 @@
 <?php
 
 use App\Http\Controllers\AccountGroupController;
+use App\Http\Controllers\AccountTypeController;
 use App\Http\Controllers\Auth\ForgotPasswordController;
+use App\Http\Controllers\ChurchLocationController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\MeetingController;
 use App\Http\Controllers\PermissionController;
 use App\Http\Controllers\QRCodeController;
 use App\Http\Controllers\RoleController;
+use App\Http\Controllers\SettingController;
 use App\Http\Controllers\UserController;
 
 use Illuminate\Http\Request;
@@ -49,7 +52,23 @@ Route::middleware('auth.token')->group(function () {
 
 
     Route::get('/account-groups', [AccountGroupController::class, 'getGroups']);
+    Route::post('/account-groups', [AccountGroupController::class, 'store']);
+    Route::put('/account-groups/{id}', [AccountGroupController::class, 'update']);
     Route::get('/account-types/{groupId}', [AccountGroupController::class, 'getTypesByGroup']);
+    
+    // Account Types CRUD routes
+    Route::get('/account-types', [AccountTypeController::class, 'index']);
+    Route::post('/account-types', [AccountTypeController::class, 'store']);
+    Route::get('/account-types/show/{id}', [AccountTypeController::class, 'show']);
+    Route::put('/account-types/{id}', [AccountTypeController::class, 'update']);
+    Route::delete('/account-types/{id}', [AccountTypeController::class, 'destroy']);
+    
+    // Church Location CRUD routes
+    Route::get('/church-locations', [ChurchLocationController::class, 'index']);
+    Route::post('/church-locations', [ChurchLocationController::class, 'store']);
+    Route::get('/church-locations/{id}', [ChurchLocationController::class, 'show']);
+    Route::put('/church-locations/{id}', [ChurchLocationController::class, 'update']);
+    Route::delete('/church-locations/{id}', [ChurchLocationController::class, 'destroy']);
     Route::post('/upload-users', [UserController::class, 'uploadUsers']);
 
     Route::get('/qrcodes/{eventId}', [QRCodeController::class, 'get']);
@@ -57,7 +76,7 @@ Route::middleware('auth.token')->group(function () {
 
      Route::post('events-list/{type}', [EventController::class, 'list']);
     Route::post('scan-event', [EventController::class, 'scanEvent']);
-    Route::get('my-events-list/{type}', [EventController::class, 'myEventList']);
+    Route::get('my-events-list', [EventController::class, 'myEventList']);
     Route::put('/cancel-event/{id}', [EventController::class, 'cancelEvent']);
     Route::post('myCalendarList', [EventController::class, 'myCalendarList']);
     // routes/api.php
@@ -65,7 +84,9 @@ Route::middleware('auth.token')->group(function () {
         Route::get('/notifications/new', [EventController::class, 'getNewNotifications']);
     Route::get('/events/{eventId}/reviews', [EventController::class, 'getReviews']);
         Route::get('/events/{eventId}/reviews', [EventController::class, 'getReviews']);
-    Route::put('events/{eventId}/review', [EventController::class, 'updateReview']);   // PUT: Update
+    Route::post('events/{eventId}/review', [EventController::class, 'submitReview']);   // PUT: Update
+ 
+        Route::put('events/{eventId}/review', [EventController::class, 'updateReview']);   // PUT: Update
     Route::post('/approve-request/{id}', [UserController::class, 'approveRequest']);
     Route::post('/get-users', [UserController::class, 'index']);
     Route::post('/search-users', [UserController::class, 'searchUsers']);
@@ -79,7 +100,7 @@ Route::get('/account-groups', [AccountGroupController::class, 'getGroups']);
 Route::get('/account-types/{groupId}', [AccountGroupController::class, 'getTypesByGroup']);
 Route::get('/get-roles', [RoleController::class, 'index']);
 
-
+Route::get('/get-church-locations', [ChurchLocationController::class, 'getChurchLocations']);
 Route::post("/login", [UserController::class, "login"]);
 
 Route::post("/register", [UserController::class, "register"]);

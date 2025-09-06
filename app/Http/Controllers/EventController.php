@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\CategoryRating;
 use App\Models\Event;
 use App\Models\EventMode;
 use App\Models\EventRegistration;
@@ -165,6 +166,7 @@ class EventController extends Controller
                 'longitude' => 'nullable|numeric',
                 'description' => 'nullable|string',
                 'image' => 'nullable|image|max:5000',
+                'location_id' => 'nullable|string',
             ]);
 
             // Extract from request instead of $validated
@@ -315,6 +317,7 @@ class EventController extends Controller
                 'longitude',
                 'description' => 'nullable|string',
                 'image' => 'nullable|file|image|max:5048',
+                'location_id' => 'nullable|string',
             ]);
 
             // Handle image upload if exists
@@ -576,7 +579,7 @@ class EventController extends Controller
         return response()->json($event, 200);
     }
 
-    public function myEventList(Request $request, $type)
+    public function myEventList(Request $request)
     {
         $userId = $request->user->id;
 
@@ -584,19 +587,32 @@ class EventController extends Controller
             $q->where('user_id', $userId);
         });
 
-        // Filter by type
-        if ($type === 'today') {
-            $query->whereDate('start_date', Carbon::today());
-        } elseif ($type === 'upcoming') {
-            $query->whereDate('start_date', '>', Carbon::today());
-        } elseif ($type === 'past') {
-            $query->whereDate('start_date', '<', Carbon::today());
+        // Check if date filter is provided (for specific date filtering)
+        $dateFilter = $request->query('date');
+
+        if ($dateFilter) {
+            // If specific date is provided, filter by that exact date 
+            $query->whereDate('start_date', $dateFilter);
         } else {
-            return response()->json(['error' => 'Invalid type'], 400);
+            // Monthly filtering based on month and year parameters
+            $month = $request->query('month', Carbon::now()->month); // Default to current month
+            $year = $request->query('year', Carbon::now()->year);   // Default to current year
+
+            // Validate month and year
+            if ($month < 1 || $month > 12) {
+                return response()->json(['error' => 'Invalid month. Must be between 1-12'], 400);
+            }
+
+            if ($year < 1900 || $year > 2100) {
+                return response()->json(['error' => 'Invalid year. Must be between 1900-2100'], 400);
+            }
+
+            // Filter events for the specified month and year
+            $query->whereMonth('start_date', $month)
+                ->whereYear('start_date', $year);
         }
 
-
-        $event = $query->orderBy('start_date', 'desc')->get()
+        $events = $query->orderBy('start_date', 'asc')->get()
             ->map(function ($event) {
                 $eventTypes = $event->eventMode
                     ->pluck('eventType')
@@ -607,9 +623,8 @@ class EventController extends Controller
                 return $event;
             });
 
-        return response()->json($event, 200);;
+        return response()->json($events, 200);
     }
-
     public function myCalendarList(Request $request)
     {
         $userId = $request->user->id;
@@ -864,7 +879,14 @@ class EventController extends Controller
 
             // Validate request
             $validated = $request->validate([
-                'rating' => 'nullable|integer|between:1,5',
+                'reviewId' => 'nullable|integer|exists:reviews,id', // For updates
+                'rating' => 'nullable|integer|between:1,5', // Overall rating
+                'category_ratings' => 'nullable|array',
+                'category_ratings.venue' => 'nullable|integer|between:1,5',
+                'category_ratings.speaker' => 'nullable|integer|between:1,5',
+                'category_ratings.events' => 'nullable|integer|between:1,5',
+                'category_ratings.foods' => 'nullable|integer|between:1,5',
+                'category_ratings.accommodation' => 'nullable|integer|between:1,5',
                 'comment' => 'nullable|string|max:1000',
             ]);
 
@@ -889,11 +911,36 @@ class EventController extends Controller
                 'rating' => $validated['rating'],
                 'comment' => $validated['comment'],
             ]);
+            $categories = $validated['category_ratings'] ?? [];
 
+
+            if (!empty($categories)) {
+                CategoryRating::create([
+                    'rating_id' => $review->id,
+                    'venue' => $categories['venue'] ?? null,
+                    'speaker' => $categories['speaker'] ?? null, // Note: frontend uses 'speaker'
+                    'event' => $categories['events'] ?? null, // Note: frontend uses 'events'
+                    'food' => $categories['foods'] ?? null, // Note: frontend uses 'foods'
+                    'accommodation' => $categories['accommodation'] ?? null,
+                ]);
+            }
             return response()->json([
-                'message' => 'Review submitted successfully',
-                'review' => $review
-            ], 201);
+                'message' => $validated['reviewId'] ? 'Review updated successfully' : 'Review submitted successfully',
+                'review' => [
+                    'id' => $review->id,
+                    'rating' => $review->rating,
+                    'comment' => $review->comment,
+                    'category_ratings' => $review->categoryRatings ? [
+                        'venue' => $review->categoryRatings->first()?->venue ?? 0,
+                        'speaker' => $review->categoryRatings->first()?->speaker ?? 0,
+                        'events' => $review->categoryRatings->first()?->event ?? 0,
+                        'foods' => $review->categoryRatings->first()?->food ?? 0,
+                        'accommodation' => $review->categoryRatings->first()?->accommodation ?? 0,
+                    ] : null,
+                    'user_id' => $review->user_id,
+                    'created_at' => $review->created_at,
+                ]
+            ], $validated['reviewId'] ? 200 : 201);
         } catch (\Exception $e) {
             return response()->json(['error' => 'Database transaction failed: ' . $e->getMessage()], 500);
         } finally {
@@ -904,23 +951,29 @@ class EventController extends Controller
     public function getReviews($eventId)
     {
         try {
-            $reviews = Review::where('event_id', $eventId)
-                ->with('user:id,name') // assuming you have a User relationship
-                ->select('id', 'user_id', 'rating', 'comment', 'created_at')
-                ->latest()
-                ->get()
-                ->map(function ($review) {
-                    return [
-                        'id' => $review->id,
-                        'name' => $review->user?->name ?? 'Anonymous',
-                        'rating' => $review->rating,
-                        'text' => $review->comment,
-                        'is_mine' => $review->user?->id === auth()->id(),
-                        'created_at' => $review->created_at,
-                    ];
-                });
+            $review = Review::where('event_id', $eventId)
+            ->where('user_id', Auth::id())
+                ->with( 'categoryRatings') // assuming you have a User relationship  
+                ->get();
+            
 
-            return response()->json(['reviews' => $reviews], 200);
+            return response()->json([
+                'review' => [
+                    'id' => $review[0]->id,
+                    'rating' => $review[0]->rating,
+                    'comment' => $review[0]->comment,
+                    'is_mine' => $review[0]->is_mine,
+                    'category_ratings' => $review[0]->categoryRatings ? [
+                        'venue' => $review[0]->categoryRatings->first()?->venue ?? 0,
+                        'speaker' => $review[0]->categoryRatings->first()?->speaker ?? 0,
+                        'events' => $review[0]->categoryRatings->first()?->event ?? 0,
+                        'foods' => $review[0]->categoryRatings->first()?->food ?? 0,
+                        'accommodation' => $review[0]->categoryRatings->first()?->accommodation ?? 0,
+                    ] : null,
+                    'user_id' => $review[0]->user_id,
+                    'created_at' => $review[0]->created_at,
+                ]
+            ], 200);
         } catch (\Exception $e) {
             return response()->json(['error' => 'Failed to fetch reviews: ' . $e->getMessage()], 500);
             //throw $th;

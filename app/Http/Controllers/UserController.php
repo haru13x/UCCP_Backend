@@ -229,8 +229,9 @@ class UserController extends Controller
                 'email' => $request->email,
                 'password' => Hash::make($request->password),
                 'api_token' => $apiToken,
-                'role_id' => $request->role ?? 2, // Ensure this is passed in the request
+                'role_id' => $request->role ?? 1, // Ensure this is passed in the request
                 'status_id' => $status_id,
+                'location_id' => $request->location ?? null,
                 'is_request' => $request->is_request ?? 0,
             ]);
 

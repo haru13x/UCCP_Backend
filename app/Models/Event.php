@@ -14,7 +14,7 @@ class Event extends Model
     // protected $with = ['eventMode.eventType'];
     protected $table = 'events';
     protected $appends = ['is_registered', 'is_attended'];
-
+    protected $with = ['location'];
     public function getIsAttendedAttribute()
     {
         $user = Auth::user();
@@ -51,5 +51,9 @@ class Event extends Model
     public function reviews()
     {
         return $this->hasMany(Review::class, 'event_id', 'id');
+    }
+    public function location()
+    {
+        return $this->belongsTo(ChurchLocation::class, 'location_id', 'id');
     }
 }
