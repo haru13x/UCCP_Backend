@@ -29,4 +29,8 @@ class Review extends Model
         if (!$user) return false;
         return ($this->user_id === $user->id);
     }
+    public function categoryRatings()
+    {
+        return $this->hasMany(CategoryRating::class, 'rating_id', 'id');
+    }   
 }
