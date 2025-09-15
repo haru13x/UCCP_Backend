@@ -11,7 +11,7 @@ class User extends Authenticatable // ✅
     use HasFactory;
 
     protected $guarded = [];
-    protected $with = ['details', 'role'];
+    protected $with = ['details', 'role','location'];
     protected $table = 'users';
 
     public function details()
@@ -34,6 +34,10 @@ class User extends Authenticatable // ✅
     public function notifications()
     {
         return $this->hasMany(Notification::class, 'user_id', 'id');
+    }
+    public function location()
+    {
+        return $this->belongsTo(ChurchLocation::class,'location_id', 'id');
     }
     // public function role_permission(){
     //     return $this->belongsTo(Role_Permissions::class,'user_id','id');

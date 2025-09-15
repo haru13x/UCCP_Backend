@@ -17,17 +17,30 @@ class UserToken
      */
     public function handle(Request $request, Closure $next)
     {
-
         $token = $request->bearerToken();
+        
         if (!$token) {
-            return response()->json(['error' => 'Unauthorized: No token provided' . $token], 401);
+            return response()->json([
+                'error' => 'Unauthorized: No token provided',
+                'message' => 'Please login to update profile'
+            ], 401);
         }
+        
         $user = User::with('accountType')->where('api_token', $token)->first();
+        
         if (!$user) {
-            return response()->json(['error' => 'Unauthorized: Invalid token or insufficient permissions'], 401);
+            return response()->json([
+                'error' => 'Unauthorized: Invalid token or insufficient permissions',
+                'message' => 'Please login to update profile',
+                'debug' => [
+                    'token_provided' => !empty($token),
+                    'token_length' => strlen($token ?? ''),
+                    'token_preview' => $token ? substr($token, 0, 10) . '...' : 'null'
+                ]
+            ], 401);
         }
 
-        // Add the patient to the request
+        // Add the user to the request
         $request->merge(['user' => $user]);
         Auth::setUser($user);
         return $next($request);

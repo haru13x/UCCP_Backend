@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Input Debug Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; }
+        input, select { margin: 5px; padding: 8px; }
+        button { padding: 10px 15px; margin: 5px; }
+        .result { background: #f0f0f0; padding: 10px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>Input Debug Test</h1>
+    
+    <div class="test-section">
+        <h3>Basic Input Test</h3>
+        <input type="text" id="textInput" placeholder="Type something here...">
+        <button onclick="testTextInput()">Test Text Input</button>
+        <div id="textResult" class="result"></div>
+    </div>
+    
+    <div class="test-section">
+        <h3>Checkbox Test</h3>
+        <label>
+            <input type="checkbox" id="checkboxInput"> Test Checkbox
+        </label>
+        <button onclick="testCheckbox()">Test Checkbox</button>
+        <div id="checkboxResult" class="result"></div>
+    </div>
+    
+    <div class="test-section">
+        <h3>Select/Dropdown Test</h3>
+        <select id="selectInput" multiple>
+            <option value="1">Option 1</option>
+            <option value="2">Option 2</option>
+            <option value="3">Option 3</option>
+        </select>
+        <button onclick="testSelect()">Test Select</button>
+        <div id="selectResult" class="result"></div>
+    </div>
+    
+    <script>
+        function testTextInput() {
+            const input = document.getElementById('textInput');
+            const result = document.getElementById('textResult');
+            result.innerHTML = `Text Input Value: "${input.value}" (Length: ${input.value.length})`;
+        }
+        
+        function testCheckbox() {
+            const checkbox = document.getElementById('checkboxInput');
+            const result = document.getElementById('checkboxResult');
+            result.innerHTML = `Checkbox Checked: ${checkbox.checked}`;
+        }
+        
+        function testSelect() {
+            const select = document.getElementById('selectInput');
+            const result = document.getElementById('selectResult');
+            const selected = Array.from(select.selectedOptions).map(opt => opt.value);
+            result.innerHTML = `Selected Values: [${selected.join(', ')}]`;
+        }
+        
+        // Auto-test on load
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('textInput').addEventListener('input', testTextInput);
+            document.getElementById('checkboxInput').addEventListener('change', testCheckbox);
+            document.getElementById('selectInput').addEventListener('change', testSelect);
+        });
+    </script>
+</body>
+</html>
