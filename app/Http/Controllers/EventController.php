@@ -17,10 +17,12 @@ use SimpleSoftwareIO\QrCode\Facades\QrCode;
 use Illuminate\Support\Facades\Storage;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use QuickChart;
 
 class EventController extends Controller
 {
+    
     // EventController.php
     public function scanEvent(Request $request)
     {
@@ -42,7 +44,9 @@ class EventController extends Controller
         $userAccountTypes = $request->user()->accountType->pluck('type')->toArray();
 
         // Get event allowed types (e.g., ["student", "alumni", ...])
-        $eventAllowedTypes = $event->eventMode->pluck('account_type')->toArray();
+        $eventAllowedTypes = $event->eventMode && $event->eventMode->account_type 
+            ? [$event->eventMode->account_type] 
+            : [];
 
         // Check if there's any intersection
         if (empty(array_intersect($userAccountTypes, $eventAllowedTypes))) {
@@ -54,10 +58,9 @@ class EventController extends Controller
         }
 
         // Append event_types for response
-        $event->event_types = $event->eventMode
-            ->pluck('eventType')
-            ->filter()
-            ->values();
+        $event->event_types = $event->eventMode && $event->eventMode->eventType 
+            ? collect([$event->eventMode->eventType])
+            : collect([]);
 
         return response()->json($event, 200);
     }
@@ -83,6 +86,14 @@ class EventController extends Controller
     public function index(Request $request)
     {
         $query = Event::query();
+
+        // Filter by user's location_id if role is not 1
+        if (auth()->check() && auth()->user()->role_id != 1) {
+            $userLocationId = auth()->user()->location_id;
+            $query->whereHas('eventLocations', function ($q) use ($userLocationId) {
+                $q->where('location_id', $userLocationId);
+            });
+        }
 
         // Filter by status_id (e.g. 1 = active, 2 = cancelled)
         if ($request->has('status_id')) {
@@ -113,14 +124,64 @@ class EventController extends Controller
             $query->where('title', 'like', '%' . $request->search . '%');
         }
 
-        $events = $query->orderBy('start_date', 'desc')->get()
+        $events = $query->with(['locations', 'eventMode.eventType', 'eventMode.eventGroup'])->orderBy('start_date', 'desc')->get()
             ->map(function ($event) {
-                $eventTypes = $event->eventMode
-                    ->pluck('eventType')
-                    ->filter()
-                    ->values();
+                $eventTypes = $event->eventMode && $event->eventMode->eventType 
+                    ? collect([$event->eventMode->eventType])
+                    : collect([]);
 
                 $event->event_types = $eventTypes;
+                
+                // Add account group IDs for frontend
+                $accountGroupIds = $event->eventMode
+                    ->pluck('account_group_id')
+                    ->filter()
+                    ->unique()
+                    ->values()
+                    ->toArray();
+                $event->accountGroupIds = $accountGroupIds;
+                
+                // Add participants data for frontend
+                $participants = $event->eventMode && $event->eventMode->account_type_id 
+                    ? [$event->eventMode->account_type_id] 
+                    : [];
+                $event->participants = $participants;
+                
+                // Add participantData for frontend
+                $participantData = $event->eventMode 
+                    ? [[
+                        'account_type_id' => $event->eventMode->account_type_id,
+                        'account_group_id' => $event->eventMode->account_group_id
+                    ]]
+                    : [];
+                $event->participantData = $participantData;
+                
+                // Override category field with comma-separated account group IDs
+                $event->category = implode(',', $accountGroupIds);
+                
+                // Simplified location handling - only use venue field
+                // For conference events, map locations to conference_locations
+                if ($event->isconference) {
+                    $event->conference_locations = $event->locations->pluck('id')->toArray();
+                    $event->location_data = $event->locations->map(function ($churchLocation) {
+                        return [
+                            'location_id' => $churchLocation->id,
+                            'id' => $churchLocation->id,
+                            'name' => $churchLocation->name,
+                            'slug' => $churchLocation->slug,
+                            'description' => $churchLocation->description,
+                        ];
+                    });
+                } else {
+                    // For regular events, use venue field only
+                    $event->conference_locations = [];
+                    $event->location_data = [];
+                    // Set location_id for single location events (legacy support)
+                    if ($event->locations->count() > 0) {
+                        $event->location_id = $event->locations->first()->id;
+                    }
+                }
+                
                 return $event;
             });
 
@@ -130,15 +191,60 @@ class EventController extends Controller
     public function getEvent($id)
     {
         $query = Event::query();
-        $event = $query->where('id', $id)
+        $event = $query->with(['locations', 'eventMode.eventType', 'eventMode.eventGroup'])->where('id', $id)
             ->orderBy('start_date', 'desc')->get()
             ->map(function ($event) {
-                $eventTypes = $event->eventMode
-                    ->pluck('eventType')
-                    ->filter()
-                    ->values();
+                $eventTypes = $event->eventMode && $event->eventMode->eventType 
+                    ? collect([$event->eventMode->eventType])
+                    : collect([]);
 
                 $event->event_types = $eventTypes;
+                
+                // Add account group IDs for frontend
+                $accountGroupIds = $event->eventMode
+                    ->pluck('account_group_id')
+                    ->filter()
+                    ->unique()
+                    ->values()
+                    ->toArray();
+                $event->accountGroupIds = $accountGroupIds;
+                
+                // Add participants data for frontend
+                $participants = $event->eventMode && $event->eventMode->account_type_id 
+                    ? [$event->eventMode->account_type_id] 
+                    : [];
+                $event->participants = $participants;
+                
+                // Add participantData for frontend
+                $participantData = $event->eventMode 
+                    ? [[
+                        'account_type_id' => $event->eventMode->account_type_id,
+                        'account_group_id' => $event->eventMode->account_group_id
+                    ]]
+                    : [];
+                $event->participantData = $participantData;
+                
+                // Override category field with comma-separated account group IDs
+                $event->category = implode(',', $accountGroupIds);
+                
+                // Simplified location handling - only use venue field
+                // For conference events, map locations to conference_locations
+                if ($event->isconference) {
+                    $event->conference_locations = $event->locations->pluck('id')->toArray();
+                    $event->location_data = $event->locations->map(function ($churchLocation) {
+                        return [
+                            'id' => $churchLocation->id,
+                            'name' => $churchLocation->name,
+                            'slug' => $churchLocation->slug,
+                            'description' => $churchLocation->description,
+                        ];
+                    });
+                } else {
+                    // For regular events, use venue field only
+                    $event->conference_locations = [];
+                    $event->location_data = [];
+                }
+                
                 return $event;
             })->first();
         return response()->json($event, 200);
@@ -167,15 +273,15 @@ class EventController extends Controller
                 'description' => 'nullable|string',
                 'image' => 'nullable|image|max:5000',
                 'location_id' => 'nullable|string',
+                'isconference' => 'nullable|boolean',
             ]);
 
-            // Extract from request instead of $validated
-            $programs = $request->input('programs', []);
-            $sponsors = $request->input('sponsors', []);
+         
             $participants = json_decode($request->input('participants', '[]'), true);
+            $participantData = json_decode($request->input('participantData', '[]'), true);
 
             // Remove if accidentally included
-            unset($validated['programs'], $validated['sponsors']);
+            
             if ($request->hasFile('image')) {
                 $file = $request->file('image');
                 $filename = time() . '.' . $file->getClientOriginalExtension();
@@ -195,21 +301,110 @@ class EventController extends Controller
 
             $validated['status_id'] = 1;
             $validated['created_by'] = $request->user->id;
+            
+            // If no location_id is provided, use the authenticated user's location_id
+            if (empty($validated['location_id']) && $request->user && $request->user->location_id) {
+                $validated['location_id'] = $request->user->location_id;
+            }
+            
             $event = Event::create($validated);
 
-            foreach ($participants as $participantId) {
-                EventMode::create([
-                    'account_type_id' => $participantId,
-                    'event_id' => $event->id,
-                    'status_id' => 1,
-                    'account_group_id' => $request->account_group_id,
-                    'created_by' => $request->user->id,
-                ]);
+            // Handle locations - only for conference events
+            if ($request->isconference && $request->has('conference_locations')) {
+                // Handle multiple locations for conference events
+                $conferenceLocations = json_decode($request->input('conference_locations', '[]'), true);
+                if (is_array($conferenceLocations)) {
+                    foreach ($conferenceLocations as $locationData) {
+                        // Handle both array of IDs and array of objects
+                        if (is_array($locationData)) {
+                            // If it's an object with location_id property
+                            $locationId = $locationData['location_id'] ?? null;
+                        } else {
+                            // If it's just an ID (integer or string)
+                            $locationId = $locationData;
+                        }
+                        
+                        if ($locationId === null || !is_numeric($locationId)) {
+                            Log::error('Invalid location_id for conference location:', ['locationData' => $locationData]);
+                            continue;
+                        }
+                        
+                        \App\Models\EventLocation::create([
+                            'event_id' => $event->id,
+                            'location_id' => (int)$locationId,
+                        ]);
+                    }
+                }
+            }
+            // For regular events, only use venue field (no event_locations table)
+
+            // Handle category as comma-separated account group IDs
+            if (!empty($validated['category'])) {
+                $categoryIds = explode(',', $validated['category']);
+                foreach ($categoryIds as $groupId) {
+                    if (!empty(trim($groupId))) {
+                        // Get all account types for this group
+                        $accountTypes = \App\Models\AccountType::where('group_id', trim($groupId))->get();
+                        
+                        foreach ($accountTypes as $accountType) {
+                            EventMode::create([
+                                'event_id' => $event->id,
+                                'account_type_id' => $accountType->id,
+                                'account_group_id' => trim($groupId),
+                                'status_id' => 1,
+                                'created_by' => $request->user->id,
+                            ]);
+                        }
+                    }
+                }
+            }
+
+            // Handle participant data with multiple account groups
+            if (!empty($participantData)) {
+                // Use new participantData structure with account_group_id for each participant
+                foreach ($participantData as $participant) {
+                    // Validate account_group_id is not null
+                    $accountGroupId = $participant['account_group_id'] ?? null;
+                    if ($accountGroupId === null) {
+                        Log::error('Store: account_group_id is null for participant', [
+                            'participant' => $participant,
+                            'participantData' => $participantData
+                        ]);
+                        continue; // Skip this participant
+                    }
+                    
+                    EventMode::create([
+                        'account_type_id' => $participant['account_type_id'],
+                        'event_id' => $event->id,
+                        'status_id' => 1,
+                        'account_group_id' => $accountGroupId,
+                        'created_by' => $request->user->id,
+                    ]);
+                }
+            } else {
+                // Fallback to old structure for backward compatibility
+                foreach ($participants as $participantId) {
+                    EventMode::create([
+                        'account_type_id' => $participantId,
+                        'event_id' => $event->id,
+                        'status_id' => 1,
+                        'account_group_id' => $request->account_group_id,
+                        'created_by' => $request->user->id,
+                    ]);
+                }
             }
 
             $processedUserIds = []; // Store user IDs that we've already notified
 
-            foreach ($participants as $participantId) {
+            // Get participant IDs for notifications
+            $participantIds = [];
+            if (!empty($participantData)) {
+                $participantIds = array_column($participantData, 'account_type_id');
+            } else {
+                $participantIds = $participants;
+            }
+
+            foreach ($participantIds as $participantId) {
                 $users = UserAccountType::with('user')
                     ->where('account_type_id', $participantId)
                     ->where('status', 1)
@@ -218,8 +413,8 @@ class EventController extends Controller
                 foreach ($users as $userAccountType) {
                     $user = $userAccountType->user;
 
-                    // Skip if this user was already processed
-                    if (in_array($user->id, $processedUserIds)) {
+                    // Skip if user is null or was already processed
+                    if (!$user || in_array($user->id, $processedUserIds)) {
                         continue;
                     }
 
@@ -300,24 +495,35 @@ class EventController extends Controller
         DB::beginTransaction();
 
         try {
+            // Validate that ID is present first
+            $request->validate([
+                'id' => 'required|integer|exists:events,id',
+            ]);
+            
             $id = $request->id;
-
+            
+            // Additional check to ensure ID is not null
+            if (!$id) {
+                return response()->json(['error' => 'Event ID is required for update'], 400);
+            }
+            
             $validated = $request->validate([
                 'title' => 'required|string',
                 'start_date' => 'nullable|date',
-                'start_time' => 'nullable',
+                'start_time' => 'nullable|string',
                 'end_date' => 'nullable|date',
-                'end_time' => 'nullable',
+                'end_time' => 'nullable|string',
                 'category' => 'nullable|string',
                 'organizer' => 'nullable|string',
                 'contact' => 'nullable|string',
                 'venue' => 'nullable|string',
                 'address' => 'nullable|string',
-                'latitude',
-                'longitude',
+                'latitude' => 'nullable|numeric',
+                'longitude' => 'nullable|numeric',
                 'description' => 'nullable|string',
                 'image' => 'nullable|file|image|max:5048',
                 'location_id' => 'nullable|string',
+                'isconference' => 'nullable|boolean',
             ]);
 
             // Handle image upload if exists
@@ -334,95 +540,131 @@ class EventController extends Controller
                 $validated['image'] = 'event-images/' . $filename;
             }
 
+            // If no location_id is provided, use the authenticated user's location_id
+            if (empty($validated['location_id']) && $request->user && $request->user->location_id) {
+                $validated['location_id'] = $request->user->location_id;
+            }
+            
             // Update event
             $event = Event::findOrFail($id);
             $event->update($validated);
-
-            // Update event modes (participants)
-            $participantIds = $request->participants ?? [];
-
-            // If it's a string (like "[1,2,3]"), convert it to array
-            if (is_string($participantIds)) {
-                $participantIds = json_decode($participantIds, true);
-            }
-
-            if (!is_array($participantIds)) {
-                return response()->json(['error' => 'Invalid participant IDs format'], 400);
-            }
-
-            $existingModes = EventMode::where('event_id', $event->id)->get();
-            $existingModeIds = $existingModes->pluck('account_type_id')->toArray();
-
-            // Deactivate or keep active existing modes
-            foreach ($existingModes as $mode) {
-                if (in_array($mode->account_type_id, $participantIds)) {
-                    $mode->update(['status_id' => 1]); // active
-                } else {
-                    $mode->update(['status_id' => 2]); // inactive
+            
+            // Handle locations - only for conference events
+            // Always remove existing event locations first
+            \App\Models\EventLocation::where('event_id', $event->id)->delete();
+            
+            if ($request->isconference && $request->has('conference_locations')) {
+                // Handle multiple locations for conference events
+                $conferenceLocations = json_decode($request->input('conference_locations', '[]'), true);
+                if (is_array($conferenceLocations)) {
+                    foreach ($conferenceLocations as $locationData) {
+                        // Handle both array of IDs and array of objects
+                        if (is_array($locationData)) {
+                            // If it's an object with location_id property
+                            $locationId = $locationData['location_id'] ?? null;
+                        } else {
+                            // If it's just an ID (integer or string)
+                            $locationId = $locationData;
+                        }
+                        
+                        if ($locationId === null || !is_numeric($locationId)) {
+                            Log::error('Invalid location_id for conference location:', ['locationData' => $locationData]);
+                            continue;
+                        }
+                        
+                        \App\Models\EventLocation::create([
+                            'event_id' => $event->id,
+                            'location_id' => (int)$locationId,
+                        ]);
+                    }
                 }
             }
-
-            // Add new modes
-            foreach ($participantIds as $accountTypeId) {
-                if (!in_array($accountTypeId, $existingModeIds)) {
-
+            // For regular events, only use venue field (no event_locations table)
+            
+            // Remove all existing EventModes for this event
+            // We'll recreate them based on participant data
+            EventMode::where('event_id', $event->id)->delete();
+            
+            // Create new event modes (participants) based on participantData
+            $participantData = json_decode($request->input('participantData', '[]'), true);
+            
+            if (!empty($participantData) && is_array($participantData)) {
+                // Use participantData structure with account_group_id information
+                foreach ($participantData as $participant) {
+                    // Ensure participant is an array and has required fields
+                    if (!is_array($participant)) {
+                        Log::error('Invalid participant data structure:', ['participant' => $participant]);
+                        continue;
+                    }
+                    
+                    $accountTypeId = $participant['account_type_id'] ?? null;
+                    $accountGroupId = $participant['account_group_id'] ?? null;
+                    
+                    if ($accountTypeId === null || $accountGroupId === null) {
+                        Log::error('Missing required fields for participant:', $participant);
+                        continue; // Skip this participant if required fields are missing
+                    }
+                    
                     EventMode::create([
                         'event_id' => $event->id,
                         'account_type_id' => (int)$accountTypeId,
-                        'account_group_id' => (int)$request->account_group_id,
+                        'account_group_id' => (int)$accountGroupId,
                         'status_id' => 1,
                         'created_by' => auth()->id() ?? 1,
                         'created_at' => now(),
                     ]);
                 }
             }
-            $processedUserIds = [];
-            foreach ($participantIds as $participantId) {
-                $users = UserAccountType::with('user')
-                    ->where('account_type_id', $participantId)
-                    ->where('status', 1)
-                    ->get();
+            
+            // $processedUserIds = [];
+            // foreach ($participantIds as $participantId) {
+            //     $users = UserAccountType::with('user')
+            //         ->where('account_type_id', $participantId)
+            //         ->where('status', 1)
+            //         ->get();
 
-                foreach ($users as $userAccountType) {
-                    $user = $userAccountType->user;
+            //     foreach ($users as $userAccountType) {
+            //         $user = $userAccountType->user;
 
-                    // Skip if this user was already processed
-                    if (in_array($user->id, $processedUserIds)) {
-                        continue;
-                    }
+            //         // Skip if this user was already processed
+            //         if (in_array($user->id, $processedUserIds)) {
+            //             continue;
+            //         }
 
-                    $title = '📅 Updated: ' . $validated['title'];
-                    $body = '📍 ' . ($validated['venue'] ?? 'Venue TBD') .
-                        ' | 🕒 ' . ($validated['start_time'] ?? '') .
-                        ' ' . ($validated['start_date'] ?? '');
+            //         $title = '📅 Updated: ' . $validated['title'];
+            //         $body = '📍 ' . ($validated['venue'] ?? 'Venue TBD') .
+            //             ' | 🕒 ' . ($validated['start_time'] ?? '') .
+            //             ' ' . ($validated['start_date'] ?? '');
 
-                    // Save notification to DB
-                    Notification::create([
-                        'user_id' => $user->id,
-                        'title' => $title,
-                        'body' => $body,
-                        'event_id' => $event->id,
-                        'type' => 'created',
-                    ]);
+            //         // Save notification to DB
+            //         Notification::create([
+            //             'user_id' => $user->id,
+            //             'title' => $title,
+            //             'body' => $body,
+            //             'event_id' => $event->id,
+            //             'type' => 'created',
+            //         ]);
 
-                    // Send push notification
-                    $notificationData = [
-                        'to' => $user->push_token,
-                        'title' => $title,
-                        'body' => $body,
-                        'sound' => 'default',
-                        'data' => [
-                            'type' => 'event',
-                            'event_id' => $event->id,
-                        ],
-                    ];
+            //         // Send push notification
+            //         $notificationData = [
+            //             'to' => $user->push_token,
+            //             'title' => $title,
+            //             'body' => $body,
+            //             'sound' => 'default',
+            //             'data' => [
+            //                 'type' => 'event',
+            //                 'event_id' => $event->id,
+            //             ],
+            //         ];
 
-                    // Http::post('https://exp.host/--/api/v2/push/send', $notificationData);
+            //         // Http::post('https://exp.host/--/api/v2/push/send', $notificationData);
 
-                    // Mark this user as processed
-                    $processedUserIds[] = $user->id;
-                }
-            }
+            //         // Mark this user as processed
+            //         $processedUserIds[] = $user->id;
+                    
+            //     }
+            // }
+            
 
 
 
@@ -538,13 +780,18 @@ class EventController extends Controller
 
         if ($user->role_id != 1) {
             $userAccountTypeIds = $user->accountType->pluck('account_type_id');
-
+            $userLocationId = auth()->user()->location_id;
             $events = Event::whereHas('eventMode', function ($query) use ($userAccountTypeIds) {
                 $query->whereIn('account_type_id', $userAccountTypeIds);
             })
                 ->whereDoesntHave('eventRegistrations', function ($q) use ($userId) {
                     $q->where('user_id', $userId); // 👈 excludes events already registered by user
-                });
+                })
+            ->whereHas('eventLocations', function ($q) use ($userLocationId) {
+                $q->where('location_id', $userLocationId);
+            });
+        
+
         } else {
             $events = Event::query();
             $events->whereDoesntHave('eventRegistrations', function ($q) use ($userId) {
@@ -567,10 +814,9 @@ class EventController extends Controller
 
         $event = $events->orderBy('start_date', 'desc')->get()
             ->map(function ($event) {
-                $eventTypes = $event->eventMode
-                    ->pluck('eventType')
-                    ->filter()
-                    ->values();
+                $eventTypes = $event->eventMode && $event->eventMode->eventType 
+                    ? collect([$event->eventMode->eventType])
+                    : collect([]);
 
                 $event->event_types = $eventTypes;
                 return $event;
@@ -612,14 +858,23 @@ class EventController extends Controller
                 ->whereYear('start_date', $year);
         }
 
-        $events = $query->orderBy('start_date', 'asc')->get()
+        $events = $query->with(['locations'])->orderBy('start_date', 'asc')->get()
             ->map(function ($event) {
-                $eventTypes = $event->eventMode
-                    ->pluck('eventType')
-                    ->filter()
-                    ->values();
+                $eventTypes = $event->eventMode && $event->eventMode->eventType 
+                    ? collect([$event->eventMode->eventType])
+                    : collect([]);
 
                 $event->event_types = $eventTypes;
+                
+                // Add location data
+                $event->location_data = $event->locations->map(function ($location) {
+                    return [
+                        'id' => $location->id,
+                        'church_location' => $location->churchLocation,
+                        'created_at' => $location->created_at,
+                    ];
+                });
+                
                 return $event;
             });
 
@@ -695,14 +950,13 @@ class EventController extends Controller
             'fromDate' => 'required|date',
             'toDate' => 'required|date|after_or_equal:fromDate',
             'status' => 'required|in:1,2',
-            'organizerId' => 'nullable|integer',
+            'locationId' => 'nullable|integer',
         ]);
 
         $query = Event::with([
             'eventRegistrations.details',
-            'eventsSponser',
-            'eventPrograms',
-            'eventMode.eventType'
+            'eventMode.eventType',
+            'locations'
         ])
             ->where(function ($q) use ($validated) {
                 $q->whereDate('start_date', '<=', $validated['toDate'])
@@ -710,8 +964,20 @@ class EventController extends Controller
             })
             ->where('status_id', $validated['status']);
 
-        if ($validated['organizerId']) {
-            $query->where('organizer', $validated['organizerId']);
+        // Add location filter if provided
+        if (!empty($validated['locationId'])) {
+            // Get the location name from church_locations table
+            $location = \App\Models\ChurchLocation::find($validated['locationId']);
+            if ($location) {
+                $query->where(function ($q) use ($validated, $location) {
+                    // Filter by venue name (for regular events)
+                    $q->where('venue', 'LIKE', '%' . $location->name . '%')
+                      // Or filter by conference locations (for conference events)
+                      ->orWhereHas('locations', function ($subQuery) use ($validated) {
+                          $subQuery->where('church_location.id', $validated['locationId']);
+                      });
+                });
+            }
         }
 
         $events = $query->orderBy('start_date')->get();
@@ -738,47 +1004,125 @@ class EventController extends Controller
                     $q->where('sex_id', 2); // 2 = female
                 })
                 ->count();
-            // Gender chart
+
+            // Get reviews and ratings data
+            $reviews = Review::where('event_id', $event->id)
+                ->with('categoryRatings', 'user')
+                ->get();
+            
+            $totalReviews = $reviews->count();
+            $averageRating = $totalReviews > 0 ? $reviews->avg('rating') : 0;
+            
+            // Calculate category averages
+            $categoryAverages = [
+                'venue' => 0,
+                'speaker' => 0,
+                'events' => 0,
+                'foods' => 0,
+                'accommodation' => 0
+            ];
+            
+            if ($totalReviews > 0) {
+                $categoryRatings = CategoryRating::whereIn('rating_id', $reviews->pluck('id'))->get();
+                $categoryAverages['venue'] = $categoryRatings->avg('venue') ?? 0;
+                $categoryAverages['speaker'] = $categoryRatings->avg('speaker') ?? 0;
+                $categoryAverages['events'] = $categoryRatings->avg('event') ?? 0;
+                $categoryAverages['foods'] = $categoryRatings->avg('food') ?? 0;
+                $categoryAverages['accommodation'] = $categoryRatings->avg('accommodation') ?? 0;
+            }
+            
+            // Handle location - use conference_locations if available, otherwise venue
+            $locationText = 'N/A';
+            if ($event->conferenceLocations && $event->conferenceLocations->isNotEmpty()) {
+                $locationText = $event->conferenceLocations->pluck('name')->join(', ');
+            } elseif ($event->venue) {
+                $locationText = $event->venue;
+            }
+            // Gender chart - handle zero data case
             $genderChartUrl = "https://quickchart.io/chart?c=" . urlencode(json_encode([
-                'type' => 'pie',
+                'type' => 'doughnut',
                 'data' => [
-                    'labels' => ['Male', 'Female'],
+                    'labels' => ['👨 Male', '👩 Female'],
                     'datasets' => [[
-                        'data' => [$maleCount, $femaleCount],
+                        'data' => [$maleCount > 0 ? $maleCount : 0, $femaleCount > 0 ? $femaleCount : 0],
                         'backgroundColor' => [
                             '#3B82F6', // Tailwind blue-500
-                            '#EF4444', // Tailwind red-500
+                            '#EC4899', // Tailwind pink-500
                         ],
+                        'borderWidth' => 3,
+                        'borderColor' => '#ffffff',
+                        'hoverBorderWidth' => 4,
+                        'hoverBorderColor' => '#1e40af'
                     ]],
                 ],
                 'options' => [
                     'plugins' => [
-                        'legend' => ['position' => 'bottom'],
+                        'legend' => [
+                            'position' => 'bottom',
+                            'labels' => [
+                                'usePointStyle' => true,
+                                'pointStyle' => 'circle',
+                                'padding' => 15,
+                                'font' => ['size' => 12, 'weight' => 'bold'],
+                                'boxWidth' => 15,
+                                'color' => '#1e40af'
+                            ]
+                        ],
+                        'datalabels' => [
+                            'display' => true,
+                            'color' => '#ffffff',
+                            'font' => ['weight' => 'bold', 'size' => 13],
+                            'formatter' => 'function(value, context) { return value > 0 ? value : "0"; }',
+                            'textStrokeColor' => '#000000',
+                            'textStrokeWidth' => 1
+                        ]
+                    ],
+                    'layout' => [
+                        'padding' => [
+                            'top' => 10,
+                            'bottom' => 30,
+                            'left' => 10,
+                            'right' => 10
+                        ]
                     ],
                     'responsive' => true,
+                    'maintainAspectRatio' => false,
                 ],
+                'plugins' => ['https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels']
             ]));
 
-            // Attendance chart
+            // Attendance chart - handle zero data case
             $attendanceChartUrl = "https://quickchart.io/chart?c=" . urlencode(json_encode([
                 'type' => 'bar',
                 'data' => [
-                    'labels' => ['Participants'],
+                    'labels' => ['📊 Event Participation'],
                     'datasets' => [
                         [
-                            'label' => 'Registered',
-                            'data' => [$registered],
-                            'backgroundColor' => '#10B981' // emerald-500
+                            'label' => '📝 Registered',
+                            'data' => [$registered > 0 ? $registered : 0],
+                            'backgroundColor' => '#10B981', // emerald-500
+                            'borderColor' => '#059669',
+                            'borderWidth' => 2,
+                            'borderRadius' => 4,
+                            'borderSkipped' => false
                         ],
                         [
-                            'label' => 'Attended',
-                            'data' => [$attended],
-                            'backgroundColor' => '#4010b9' // purple-ish
+                            'label' => '✅ Attended',
+                            'data' => [$attended > 0 ? $attended : 0],
+                            'backgroundColor' => '#6366F1', // indigo-500
+                            'borderColor' => '#4f46e5',
+                            'borderWidth' => 2,
+                            'borderRadius' => 4,
+                            'borderSkipped' => false
                         ],
                         [
-                            'label' => 'Not Attended',
-                            'data' => [$notAttended],
-                            'backgroundColor' => '#F43F5E' // rose-500
+                            'label' => '❌ Not Attended',
+                            'data' => [$notAttended > 0 ? $notAttended : 0],
+                            'backgroundColor' => '#F43F5E', // rose-500
+                            'borderColor' => '#e11d48',
+                            'borderWidth' => 2,
+                            'borderRadius' => 4,
+                            'borderSkipped' => false
                         ]
                     ],
                 ],
@@ -787,30 +1131,87 @@ class EventController extends Controller
                         'y' => [
                             'min' => 0,
                             'beginAtZero' => true,
-                            'ticks' => ['stepSize' => 5]
+                            'grid' => [
+                                'color' => '#e2e8f0',
+                                'lineWidth' => 1
+                            ],
+                            'ticks' => [
+                                'stepSize' => $registered > 10 ? 5 : 1,
+                                'callback' => 'function(value) { return Number.isInteger(value) ? value : null; }',
+                                'font' => ['size' => 11, 'weight' => 'bold'],
+                                'color' => '#475569'
+                            ]
+                        ],
+                        'x' => [
+                            'grid' => [
+                                'display' => false
+                            ],
+                            'ticks' => [
+                                'font' => ['size' => 11, 'weight' => 'bold'],
+                                'maxRotation' => 0,
+                                'color' => '#1e40af'
+                            ]
                         ]
                     ],
                     'plugins' => [
                         'legend' => [
                             'display' => true,
-                            'position' => 'top'
+                            'position' => 'bottom',
+                            'labels' => [
+                                'usePointStyle' => true,
+                                'pointStyle' => 'rect',
+                                'padding' => 15,
+                                'font' => ['size' => 11, 'weight' => 'bold'],
+                                'boxWidth' => 15,
+                                'color' => '#1e40af'
+                            ]
                         ],
                         'datalabels' => [
+                            'display' => true,
                             'anchor' => 'end',
-                            'align' => 'bottom',
-                            'color' => '#000',
+                            'align' => 'top',
+                            'color' => '#1e40af',
+                            'backgroundColor' => '#ffffff',
+                            'borderColor' => '#e2e8f0',
+                            'borderWidth' => 1,
+                            'borderRadius' => 3,
+                            'padding' => 4,
                             'font' => [
                                 'weight' => 'bold',
-                                'size' => 12
-                            ]
+                                'size' => 11
+                            ],
+                            'formatter' => 'function(value, context) { return value > 0 ? value : "0"; }'
                         ]
-                    ]
+                    ],
+                    'layout' => [
+                        'padding' => [
+                            'bottom' => 30,
+                            'top' => 15,
+                            'left' => 10,
+                            'right' => 10
+                        ]
+                    ],
+                    'responsive' => true,
+                    'maintainAspectRatio' => false,
                 ],
                 'plugins' => ['https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels']
             ]));
 
 
-            $eventData[$event->id] = compact('genderChartUrl', 'attendanceChartUrl', 'registered', 'attended', 'notAttended', 'maleCount', 'femaleCount');
+            $eventData[$event->id] = compact(
+                'genderChartUrl', 
+                'attendanceChartUrl', 
+                'registered', 
+                'attended', 
+                'notAttended', 
+                'maleCount', 
+                'femaleCount',
+                'totalReviews',
+                'averageRating',
+                'categoryAverages',
+                'locationText',
+                'reviews'
+            );
         }
 
         $pdf = PDF::setOptions([
@@ -905,24 +1306,66 @@ class EventController extends Controller
                 return response()->json(['message' => 'You must be registered to review this event'], 403);
             }
 
-            $review = Review::create([
-                'event_id' => $eventId,
-                'user_id' => $user->id,
-                'rating' => $validated['rating'],
-                'comment' => $validated['comment'],
-            ]);
-            $categories = $validated['category_ratings'] ?? [];
-
-
-            if (!empty($categories)) {
-                CategoryRating::create([
-                    'rating_id' => $review->id,
-                    'venue' => $categories['venue'] ?? null,
-                    'speaker' => $categories['speaker'] ?? null, // Note: frontend uses 'speaker'
-                    'event' => $categories['events'] ?? null, // Note: frontend uses 'events'
-                    'food' => $categories['foods'] ?? null, // Note: frontend uses 'foods'
-                    'accommodation' => $categories['accommodation'] ?? null,
+            // Check if this is an update or new review
+            if ($validated['reviewId']) {
+                // Update existing review
+                $review = Review::where('id', $validated['reviewId'])
+                    ->where('user_id', $user->id)
+                    ->where('event_id', $eventId)
+                    ->first();
+                
+                if (!$review) {
+                    return response()->json(['message' => 'Review not found or unauthorized'], 404);
+                }
+                
+                $review->update([
+                    'rating' => $validated['rating'],
+                    'comment' => $validated['comment'],
                 ]);
+                
+                // Update category ratings
+                $categories = $validated['category_ratings'] ?? [];
+                if (!empty($categories)) {
+                    $categoryRating = CategoryRating::where('rating_id', $review->id)->first();
+                    if ($categoryRating) {
+                        $categoryRating->update([
+                            'venue' => $categories['venue'] ?? null,
+                            'speaker' => $categories['speaker'] ?? null,
+                            'event' => $categories['events'] ?? null,
+                            'food' => $categories['foods'] ?? null,
+                            'accommodation' => $categories['accommodation'] ?? null,
+                        ]);
+                    } else {
+                        CategoryRating::create([
+                            'rating_id' => $review->id,
+                            'venue' => $categories['venue'] ?? null,
+                            'speaker' => $categories['speaker'] ?? null,
+                            'event' => $categories['events'] ?? null,
+                            'food' => $categories['foods'] ?? null,
+                            'accommodation' => $categories['accommodation'] ?? null,
+                        ]);
+                    }
+                }
+            } else {
+                // Create new review
+                $review = Review::create([
+                    'event_id' => $eventId,
+                    'user_id' => $user->id,
+                    'rating' => $validated['rating'],
+                    'comment' => $validated['comment'],
+                ]);
+                
+                $categories = $validated['category_ratings'] ?? [];
+                if (!empty($categories)) {
+                    CategoryRating::create([
+                        'rating_id' => $review->id,
+                        'venue' => $categories['venue'] ?? null,
+                        'speaker' => $categories['speaker'] ?? null,
+                        'event' => $categories['events'] ?? null,
+                        'food' => $categories['foods'] ?? null,
+                        'accommodation' => $categories['accommodation'] ?? null,
+                    ]);
+                }
             }
             return response()->json([
                 'message' => $validated['reviewId'] ? 'Review updated successfully' : 'Review submitted successfully',
@@ -952,28 +1395,29 @@ class EventController extends Controller
     {
         try {
             $review = Review::where('event_id', $eventId)
-            ->where('user_id', Auth::id())
-                ->with( 'categoryRatings') // assuming you have a User relationship  
+                ->with('categoryRatings', 'user') // assuming you have a User relationship  
                 ->get();
             
 
-            return response()->json([
-                'review' => [
-                    'id' => $review[0]->id,
-                    'rating' => $review[0]->rating,
-                    'comment' => $review[0]->comment,
-                    'is_mine' => $review[0]->is_mine,
-                    'category_ratings' => $review[0]->categoryRatings ? [
-                        'venue' => $review[0]->categoryRatings->first()?->venue ?? 0,
-                        'speaker' => $review[0]->categoryRatings->first()?->speaker ?? 0,
-                        'events' => $review[0]->categoryRatings->first()?->event ?? 0,
-                        'foods' => $review[0]->categoryRatings->first()?->food ?? 0,
-                        'accommodation' => $review[0]->categoryRatings->first()?->accommodation ?? 0,
+            $formattedReviews = $review->map(function ($r) {
+                return [
+                    'id' => $r->id,
+                    'rating' => $r->rating,
+                    'comment' => $r->comment,
+                    'is_mine' => $r->is_mine,
+                    'category_ratings' => $r->categoryRatings ? [
+                        'venue' => $r->categoryRatings->first()?->venue ?? 0,
+                        'speaker' => $r->categoryRatings->first()?->speaker ?? 0,
+                        'events' => $r->categoryRatings->first()?->event ?? 0,
+                        'foods' => $r->categoryRatings->first()?->food ?? 0,
+                        'accommodation' => $r->categoryRatings->first()?->accommodation ?? 0,
                     ] : null,
-                    'user_id' => $review[0]->user_id,
-                    'created_at' => $review[0]->created_at,
-                ]
-            ], 200);
+                    'user_id' => $r->user_id,
+                    'created_at' => $r->created_at,
+                ];
+            });
+
+            return response()->json(['reviews' => $formattedReviews], 200);
         } catch (\Exception $e) {
             return response()->json(['error' => 'Failed to fetch reviews: ' . $e->getMessage()], 500);
             //throw $th;

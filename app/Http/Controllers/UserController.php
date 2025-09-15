@@ -12,6 +12,7 @@ use Illuminate\Http\Request;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Maatwebsite\Excel\Facades\Excel;
 
@@ -51,7 +52,7 @@ class UserController extends Controller
                     });
             });
         }
-        $users = $query->with('accountType')->orderBy('name', 'asc')->get(); // Use ->get() instead of ->all()
+        $users = $query->with(['accountType', 'details.churchLocation'])->orderBy('name', 'asc')->get(); // Use ->get() instead of ->all()
         return response()->json($users, 200);
     }
     public function approveRequest($id)
@@ -229,9 +230,9 @@ class UserController extends Controller
                 'email' => $request->email,
                 'password' => Hash::make($request->password),
                 'api_token' => $apiToken,
-                'role_id' => $request->role ?? 1, // Ensure this is passed in the request
+                'role_id' => $request->role ?? 3, // Ensure this is passed in the request
                 'status_id' => $status_id,
-                'location_id' => $request->location ?? null,
+                'location_id' => $request->churchLocationId ?? null,
                 'is_request' => $request->is_request ?? 0,
             ]);
 
@@ -244,6 +245,7 @@ class UserController extends Controller
                 'sex_id' => $request->gender,
                 'status_id' => 1,
                 'phone_number' => $request->phone,
+               
                 'created_by' => $user->id,
 
             ]);
@@ -337,6 +339,7 @@ class UserController extends Controller
             'accountGroupId' => 'nullable|integer',
             'account_type_id' => 'array',
             'account_type_id.*' => 'integer|exists:account_types,id',
+            'churchLocationId' => 'nullable|integer|exists:church_location,id',
         ]);
 
         DB::beginTransaction();
@@ -350,6 +353,7 @@ class UserController extends Controller
                 'username' => $request->username,
                 'email' => $request->email,
                 'role_id' => $request->role,
+                'location_id' => $request->churchLocationId ?? null,
             ]);
 
             if ($request->filled('password')) {
@@ -366,7 +370,7 @@ class UserController extends Controller
             $details->address = $request->address;
             $details->phone_number = $request->phone;
             $details->sex_id = $request->gender;
-            $details->save();
+                    $details->save();
 
             // ✅ Handle Account Types
             $selectedAccountTypes = $request->account_type_id ?? [];
@@ -418,5 +422,197 @@ class UserController extends Controller
         $user = User::where('role_id', 2)->where('status_id', 1)
             ->get();
         return response()->json($user, 200);
+    }
+
+    public function getProfile(Request $request)
+    {
+        try {
+            $user = $request->user();
+            if (!$user) {
+                return response()->json(['message' => 'User not authenticated'], 401);
+            }
+
+            $userWithDetails = User::with(['details', 'role', 'accountType'])
+                ->find($user->id);
+
+            // Structure data to use user.username and map fields properly
+            $profileData = [
+                'id' => $userWithDetails->id,
+                'name' => $userWithDetails->name,
+                'username' => $userWithDetails->username, // Use user.username instead of userdetails
+                'email' => $userWithDetails->email,
+                'image' => $userWithDetails->image ? $userWithDetails->image : null, // Add image field with proper path
+                'role' => $userWithDetails->role,
+                'accountType' => $userWithDetails->accountType,
+                // Map userdetails fields with proper naming
+                'first_name' => $userWithDetails->details->first_name ?? '',
+                'last_name' => $userWithDetails->details->last_name ?? '',
+                'middle_name' => $userWithDetails->details->middle_name ?? '',
+                'phone_number' => $userWithDetails->details->phone_number ?? '',
+                'birthdate' => $userWithDetails->details->birthdate ?? '',
+                'address' => $userWithDetails->details->address ?? '',
+                'barangay' => $userWithDetails->details->barangay ?? '',
+                'municipal' => $userWithDetails->details->municipal ?? '',
+                'province' => $userWithDetails->details->province ?? '',
+                'sex_id' => $userWithDetails->details->sex_id ?? null,
+            ];
+
+            return response()->json([
+                'success' => true,
+                'data' => $profileData
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch profile',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function updateProfile(Request $request)
+    {
+        $request->validate([
+            'first_name' => 'required|string|max:255',
+            'last_name' => 'required|string|max:255',
+            'middle_name' => 'nullable|string|max:255',
+            'username' => 'required|string|max:255|unique:users,username,' . $request->user()->id,
+            'email' => 'required|email|unique:users,email,' . $request->user()->id,
+            'phone_number' => 'nullable|string|max:20',
+            'birthdate' => 'nullable|date',
+            'address' => 'nullable|string|max:500',
+            'barangay' => 'nullable|string|max:255',
+            'municipal' => 'nullable|string|max:255',
+            'province' => 'nullable|string|max:255',
+            'sex_id' => 'nullable|integer|exists:sexes,id',
+            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
+        ]);
+
+        DB::beginTransaction();
+        try {
+            $user = $request->user();
+            $details = $user->details ?: new UserDetails(['user_id' => $user->id]);
+
+            // Handle image upload
+            $imagePath = $user->image; // Keep existing image if no new one uploaded
+            if ($request->hasFile('image')) {
+                // Delete old image if exists
+                if ($user->image) {
+                    $oldImagePath = public_path('storage/' . $user->image);
+                    if (file_exists($oldImagePath)) {
+                        unlink($oldImagePath);
+                    }
+                }
+                
+                // Store new image using same pattern as events
+                $file = $request->file('image');
+                $filename = time() . '.' . $file->getClientOriginalExtension();
+                $destinationPath = public_path('storage/user-images');
+                
+                // Ensure the directory exists
+                if (!file_exists($destinationPath)) {
+                    mkdir($destinationPath, 0755, true);
+                }
+                
+                $file->move($destinationPath, $filename);
+                $imagePath = 'user-images/' . $filename;
+            }
+
+            // Update user basic info - map firstname + lastname to name, handle username and email in user table
+            $user->update([
+                'name' => $request->first_name . ' ' . $request->last_name, // Map firstname + lastname to name
+                'username' => $request->username, // Handle username in user table
+                'email' => $request->email, // Handle email in user table
+                'image' => $imagePath, // Update image path
+            ]);
+
+            // Update user details - handle sex_id and other fields in userdetails
+            $details->fill([
+                'first_name' => $request->first_name,
+                'middle_name' => $request->middle_name,
+                'last_name' => $request->last_name,
+                'phone_number' => $request->phone_number,
+                'birthdate' => $request->birthdate,
+                'address' => $request->address,
+                'barangay' => $request->barangay,
+                'municipal' => $request->municipal,
+                'province' => $request->province,
+                'sex_id' => $request->sex_id, // Handle sex_id in userdetails
+            ]);
+            $details->save();
+
+            DB::commit();
+
+            // Return structured data consistent with getProfile
+            $updatedUser = $user->fresh(['details', 'role', 'accountType']);
+            $profileData = [
+                'id' => $updatedUser->id,
+                'name' => $updatedUser->name,
+                'username' => $updatedUser->username,
+                'email' => $updatedUser->email,
+                'image' => $updatedUser->image,
+                'role' => $updatedUser->role,
+                'accountType' => $updatedUser->accountType,
+                'first_name' => $updatedUser->details->first_name ?? '',
+                'last_name' => $updatedUser->details->last_name ?? '',
+                'middle_name' => $updatedUser->details->middle_name ?? '',
+                'phone_number' => $updatedUser->details->phone_number ?? '',
+                'birthdate' => $updatedUser->details->birthdate ?? '',
+                'address' => $updatedUser->details->address ?? '',
+                'barangay' => $updatedUser->details->barangay ?? '',
+                'municipal' => $updatedUser->details->municipal ?? '',
+                'province' => $updatedUser->details->province ?? '',
+                'sex_id' => $updatedUser->details->sex_id ?? null,
+            ];
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Profile updated successfully',
+                'data' => $profileData
+            ], 200);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update profile',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function changePassword(Request $request)
+    {
+        $request->validate([
+            'current_password' => 'required|string',
+            'new_password' => 'required|string|min:6|confirmed',
+        ]);
+
+        try {
+            $user = $request->user();
+            
+            // Check if current password is correct
+            if (!Hash::check($request->current_password, $user->password)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Current password is incorrect'
+                ], 400);
+            }
+
+            // Update password
+            $user->update([
+                'password' => Hash::make($request->new_password)
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Password changed successfully'
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to change password',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 }

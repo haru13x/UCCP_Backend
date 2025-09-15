@@ -11,8 +11,8 @@ class ChurchLocationController extends Controller
 {
     public function index()
     {
-        $churchLocations = ChurchLocation::with('creator')
-            ->where('status_id', 1)
+        $churchLocations = ChurchLocation::
+            where('status_id', 1)
             ->orderBy('created_at', 'desc')
             ->get();
         
@@ -21,8 +21,7 @@ class ChurchLocationController extends Controller
 
     public function getChurchLocations()
     {
-               $churchLocations = ChurchLocation::with('creator')
-            ->where('status_id', 1)
+               $churchLocations = ChurchLocation::where('status_id', 1)
             ->orderBy('created_at', 'desc')
             ->get();
         

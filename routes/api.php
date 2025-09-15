@@ -82,7 +82,7 @@ Route::middleware('auth.token')->group(function () {
     // routes/api.php
     Route::post('/generate-event-report', [EventController::class, 'generatePdf']);
         Route::get('/notifications/new', [EventController::class, 'getNewNotifications']);
-    Route::get('/events/{eventId}/reviews', [EventController::class, 'getReviews']);
+
         Route::get('/events/{eventId}/reviews', [EventController::class, 'getReviews']);
     Route::post('events/{eventId}/review', [EventController::class, 'submitReview']);   // PUT: Update
  
@@ -93,6 +93,12 @@ Route::middleware('auth.token')->group(function () {
     Route::post('/request-registration', [UserController::class, 'requestRegistration']);
     Route::post('/update-users', [UserController::class, 'update']);
       Route::post('/update-user-status', [UserController::class, 'updateStatus']);
+    
+    // Profile Management Routes
+    Route::get('/profile', [UserController::class, 'getProfile']);
+    Route::put('/profile', [UserController::class, 'updateProfile']);
+    Route::post('/change-password', [UserController::class, 'changePassword']);
+    
     Route::get('/get-event/{eventId}', [EventController::class, 'getEvent']);
 
 });
