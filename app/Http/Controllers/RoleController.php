@@ -3,15 +3,28 @@
 namespace App\Http\Controllers;
 
 use App\Models\Role;
-use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
 
-class RoleController extends Model
+class RoleController extends Controller
 {
-    use HasFactory;
-      public function index()
+    public function index(Request $request)
     {
-        return Role::with('role_permissions')->get();
+        $query = Role::with('role_permissions');
+
+        $query->where('id', '!=', 1);
+        // Apply status filter
+        $status = $request->query('status', 'all');
+        if ($status === 'active') {
+            $query->where('status_id', 1);
+        } elseif ($status === 'inactive') {
+            $query->where('status_id', 0);
+        }
+
+        // If status is 'all', no filter is applied
+        
+        $roles = $query->get();
+        
+        return response()->json($roles);
     }
 
     public function show($id)

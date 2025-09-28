@@ -9,9 +9,56 @@ use Illuminate\Support\Facades\Validator;
 
 class AccountGroupController extends Controller
 {
-    public function getGroups()
+    public function index(Request $request)
     {
-        return response()->json(AccountGroup::where('is_active', 1)->get());
+        $query = AccountGroup::query();
+        
+        // Apply status filter
+        $status = $request->query('status', 'all');
+        if ($status === 'active') {
+            $query->where('is_active', 1);
+        } elseif ($status === 'inactive') {
+            $query->where('is_active', 0);
+        }
+        // If status is 'all', no filter is applied
+        
+        // Apply name filter
+        $search = $request->query('search');
+        if ($search) {
+            $query->where(function($q) use ($search) {
+                $q->where('code', 'LIKE', '%' . $search . '%')
+                  ->orWhere('description', 'LIKE', '%' . $search . '%');
+            });
+        }
+        
+        $accountGroups = $query->get();
+        
+        return response()->json($accountGroups);
+    }
+
+    public function getGroups(Request $request)
+    {
+          $query = AccountGroup::query();
+        
+        // Apply status filter
+        $status = $request->query('status', 'all');
+        if ($status === 'active') {
+            $query->where('is_active', 1);
+        } elseif ($status === 'inactive') {
+            $query->where('is_active', 0);
+        }
+        // If status is 'all', no filter is applied
+             $search = $request->query('search');
+        if ($search) {
+            $query->where(function($q) use ($search) {
+                $q->where('code', 'LIKE', '%' . $search . '%')
+                  ->orWhere('description', 'LIKE', '%' . $search . '%');
+            });
+        }
+        
+        $accountGroups = $query->get();
+        
+        return response()->json($accountGroups);
     }
 
     public function getTypesByGroup($groupId)

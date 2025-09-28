@@ -51,12 +51,14 @@ Route::middleware('auth.token')->group(function () {
     Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
 
 
-    Route::get('/account-groups', [AccountGroupController::class, 'getGroups']);
+    // Account Groups CRUD routes with filtering
+    Route::get('/account-groups', [AccountGroupController::class, 'index']);
+    Route::get('/account-groups/active', [AccountGroupController::class, 'getGroups']);
     Route::post('/account-groups', [AccountGroupController::class, 'store']);
     Route::put('/account-groups/{id}', [AccountGroupController::class, 'update']);
     Route::get('/account-types/{groupId}', [AccountGroupController::class, 'getTypesByGroup']);
     
-    // Account Types CRUD routes
+    // Account Types CRUD routes with filtering
     Route::get('/account-types', [AccountTypeController::class, 'index']);
     Route::post('/account-types', [AccountTypeController::class, 'store']);
     Route::get('/account-types/show/{id}', [AccountTypeController::class, 'show']);
@@ -76,7 +78,7 @@ Route::middleware('auth.token')->group(function () {
 
      Route::post('events-list/{type}', [EventController::class, 'list']);
     Route::post('scan-event', [EventController::class, 'scanEvent']);
-    Route::get('my-events-list', [EventController::class, 'myEventList']);
+    Route::get('my-events-list/{filter?}', [EventController::class, 'myEventList']);
     Route::put('/cancel-event/{id}', [EventController::class, 'cancelEvent']);
     Route::post('myCalendarList', [EventController::class, 'myCalendarList']);
     // routes/api.php
@@ -104,6 +106,8 @@ Route::middleware('auth.token')->group(function () {
 });
 Route::get('/account-groups', [AccountGroupController::class, 'getGroups']);
 Route::get('/account-types/{groupId}', [AccountGroupController::class, 'getTypesByGroup']);
+// Roles CRUD routes with filtering
+Route::get('/roles', [RoleController::class, 'index']);
 Route::get('/get-roles', [RoleController::class, 'index']);
 
 Route::get('/get-church-locations', [ChurchLocationController::class, 'getChurchLocations']);

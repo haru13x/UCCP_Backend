@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Auth;
 use App\Models\ChurchLocation;
+use App\Models\User;
 
 class Event extends Model
 {
@@ -42,6 +43,12 @@ class Event extends Model
         return $this->hasOne(EventMode::class, 'event_id', 'id')
             ->where('status_id', 1);
     }
+    
+    public function eventModes()
+    {
+        return $this->hasMany(EventMode::class, 'event_id', 'id')
+            ->where('status_id', 1);
+    }
     public function reviews()
     {
         return $this->hasMany(Review::class, 'event_id', 'id');
@@ -54,5 +61,10 @@ class Event extends Model
     public function eventLocations()
     {
         return $this->hasMany(EventLocation::class, 'event_id', 'id');
+    }
+
+    public function user()
+    {
+        return $this->belongsTo(User::class, 'created_by', 'id');
     }
 }
