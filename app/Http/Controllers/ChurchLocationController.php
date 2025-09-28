@@ -9,12 +9,30 @@ use Illuminate\Support\Str;
 
 class ChurchLocationController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        $churchLocations = ChurchLocation::
-            where('status_id', 1)
-            ->orderBy('created_at', 'desc')
-            ->get();
+        $query = ChurchLocation::query();
+        
+        // Apply status filter
+        $status = $request->query('status', 'all');
+        if ($status === 'active') {
+            $query->where('status_id', 1);
+        } elseif ($status === 'inactive') {
+            $query->where('status_id', 0);
+        }
+        // If status is 'all', no filter is applied
+        
+        // Apply name filter
+        $search = $request->query('search');
+        if ($search) {
+            $query->where(function($q) use ($search) {
+                $q->where('name', 'LIKE', '%' . $search . '%')
+                  ->orWhere('slug', 'LIKE', '%' . $search . '%')
+                  ->orWhere('description', 'LIKE', '%' . $search . '%');
+            });
+        }
+        
+        $churchLocations = $query->orderBy('created_at', 'desc')->get();
         
         return response()->json($churchLocations);
     }

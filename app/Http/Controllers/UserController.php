@@ -9,7 +9,7 @@ use Carbon\Carbon;
 
 use Dotenv\Validator;
 use Illuminate\Http\Request;
-
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
@@ -40,6 +40,11 @@ class UserController extends Controller
     public function index(Request $request)
     {
         $query = User::where('is_request', 0);
+        if(Auth::user()->role_id !== 1){
+            $query->where('role_id', '!=' ,1);
+        }else{
+            $query->where('id', '!=' ,Auth::user()->id);
+        }
         if ($request->has('search')) {
             $search = $request->input('search');
 
@@ -232,7 +237,7 @@ class UserController extends Controller
                 'api_token' => $apiToken,
                 'role_id' => $request->role ?? 3, // Ensure this is passed in the request
                 'status_id' => $status_id,
-                'location_id' => $request->churchLocationId ?? null,
+                'location_id' => $request->churchLocationId ?? $request->location,
                 'is_request' => $request->is_request ?? 0,
             ]);
 

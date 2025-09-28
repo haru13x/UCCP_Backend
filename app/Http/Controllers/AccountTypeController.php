@@ -9,11 +9,32 @@ use Illuminate\Support\Facades\Validator;
 
 class AccountTypeController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        $accountTypes = AccountType::with('group')
-            ->where('is_active', 1)
-            ->get();
+        $query = AccountType::with('group');
+        
+        // Apply status filter
+        $status = $request->query('status', 'all');
+        if ($status === 'active') {
+            $query->where('is_active', 1);
+        } elseif ($status === 'inactive') {
+            $query->where('is_active', 0);
+        }
+        // If status is 'all', no filter is applied
+        
+        // Apply name filter
+        $search = $request->query('search');
+        if ($search) {
+            $query->where(function($q) use ($search) {
+                $q->where('code', 'LIKE', '%' . $search . '%')
+                  ->orWhere('description', 'LIKE', '%' . $search . '%')
+                  ->orWhereHas('group', function($groupQuery) use ($search) {
+                      $groupQuery->where('description', 'LIKE', '%' . $search . '%');
+                  });
+            });
+        }
+        
+        $accountTypes = $query->get();
         
         return response()->json($accountTypes);
     }
@@ -68,7 +89,7 @@ class AccountTypeController extends Controller
 
         $validator = Validator::make($request->all(), [
             'group_id' => 'required|integer|exists:account_groups,id',
-            'code' => 'required|string|max:20|unique:account_types,code,' . $id,
+            'code' => 'required|string|max:50|unique:account_types,code,' . $id,
             'description' => 'required|string|max:255',
             'is_active' => 'boolean'
         ]);
