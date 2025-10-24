@@ -49,6 +49,7 @@ Route::middleware('auth.token')->group(function () {
 
     Route::get('/dashboard/chart', [DashboardController::class, 'chart']);
     Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
+    Route::post('/dashboard/events-by-date', [DashboardController::class, 'getEventsByDate']);
 
 
     // Account Groups CRUD routes with filtering
@@ -86,10 +87,12 @@ Route::middleware('auth.token')->group(function () {
         Route::get('/notifications/new', [EventController::class, 'getNewNotifications']);
 
         Route::get('/events/{eventId}/reviews', [EventController::class, 'getReviews']);
+        Route::get('/events/{eventId}/overview', [EventController::class, 'overview']);
     Route::post('events/{eventId}/review', [EventController::class, 'submitReview']);   // PUT: Update
  
         Route::put('events/{eventId}/review', [EventController::class, 'updateReview']);   // PUT: Update
     Route::post('/approve-request/{id}', [UserController::class, 'approveRequest']);
+    Route::post('/decline-request/{id}', [UserController::class, 'declineRequest']);
     Route::post('/get-users', [UserController::class, 'index']);
     Route::post('/search-users', [UserController::class, 'searchUsers']);
     Route::post('/request-registration', [UserController::class, 'requestRegistration']);
@@ -103,6 +106,18 @@ Route::middleware('auth.token')->group(function () {
     
     Route::get('/get-event/{eventId}', [EventController::class, 'getEvent']);
 
+    // Nationalities CRUD (protected)
+    Route::post('/nationalities', [\App\Http\Controllers\NationalityController::class, 'store']);
+    Route::get('/nationalities/{id}', [\App\Http\Controllers\NationalityController::class, 'show']);
+    Route::put('/nationalities/{id}', [\App\Http\Controllers\NationalityController::class, 'update']);
+    Route::delete('/nationalities/{id}', [\App\Http\Controllers\NationalityController::class, 'destroy']);
+
+    // Civil Statuses CRUD (protected)
+    Route::post('/civil-statuses', [\App\Http\Controllers\CivilStatusController::class, 'store']);
+    Route::get('/civil-statuses/{id}', [\App\Http\Controllers\CivilStatusController::class, 'show']);
+    Route::put('/civil-statuses/{id}', [\App\Http\Controllers\CivilStatusController::class, 'update']);
+    Route::delete('/civil-statuses/{id}', [\App\Http\Controllers\CivilStatusController::class, 'destroy']);
+
 });
 Route::get('/account-groups', [AccountGroupController::class, 'getGroups']);
 Route::get('/account-types/{groupId}', [AccountGroupController::class, 'getTypesByGroup']);
@@ -111,9 +126,15 @@ Route::get('/roles', [RoleController::class, 'index']);
 Route::get('/get-roles', [RoleController::class, 'index']);
 
 Route::get('/get-church-locations', [ChurchLocationController::class, 'getChurchLocations']);
+// New list endpoints
+Route::get('/nationalities', [\App\Http\Controllers\NationalityController::class, 'index']);
+Route::get('/civil-statuses', [\App\Http\Controllers\CivilStatusController::class, 'index']);
+
 Route::post("/login", [UserController::class, "login"]);
 
 Route::post("/register", [UserController::class, "register"]);
+Route::post("/generate-registration-otp", [UserController::class, "generateRegistrationOtp"]);
+Route::post("/verify-registration-otp", [UserController::class, "verifyRegistrationOtp"]);
 
 Route::post('forgot-password', [ForgotPasswordController::class, 'forgotPassword']);
 Route::post('verify-otp', [ForgotPasswordController::class, 'verifyOtp']);

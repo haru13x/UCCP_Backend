@@ -35,7 +35,7 @@ class QRCodeController extends Controller
         }
 
         // Generate QR code binary
-        $qrImage = \QrCode::format('png')
+        $qrImage = QrCode::format('png')
             ->size(300)
             ->generate("{$barcode}");
 

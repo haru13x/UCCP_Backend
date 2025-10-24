@@ -11,10 +11,6 @@ class EventMode extends Model
      protected $guarded = [];
     protected $table = 'event_modes';
     
-     public function eventType()
-    {
-        return $this->belongsTo(AccountType::class, 'account_type_id', 'id');
-    }
     public function eventGroup(){
         return $this->belongsTo(AccountGroup::class,'account_group_id','id');
     }
