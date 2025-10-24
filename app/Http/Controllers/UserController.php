@@ -3,15 +3,16 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Models\RegistrationOtp;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Validator;
 use App\Models\UserDetails;
 use PhpOffice\PhpSpreadsheet\Shared\Date; // This is where excelToDateTimeObject comes from
 use Carbon\Carbon;
-
-use Dotenv\Validator;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Maatwebsite\Excel\Facades\Excel;
@@ -40,10 +41,13 @@ class UserController extends Controller
     public function index(Request $request)
     {
         $query = User::where('is_request', 0);
-        if(Auth::user()->role_id !== 1){
-            $query->where('role_id', '!=' ,1);
-        }else{
-            $query->where('id', '!=' ,Auth::user()->id);
+         $role_id = $request->input('role_id');
+            $group_id = $request->input('group_id');
+
+        if (Auth::user()->role_id !== 1) {
+            $query->where('role_id', '!=', 1);
+        } else {
+            $query->where('id', '!=', Auth::user()->id);
         }
         if ($request->has('search')) {
             $search = $request->input('search');
@@ -57,6 +61,16 @@ class UserController extends Controller
                     });
             });
         }
+
+        if ($role_id) {
+           
+            $query->where('role_id', $role_id);
+        }
+        if ($group_id) {
+         
+            $query->where('group_id', $group_id);
+        }
+
         $users = $query->with(['accountType', 'details.churchLocation'])->orderBy('name', 'asc')->get(); // Use ->get() instead of ->all()
         return response()->json($users, 200);
     }
@@ -70,15 +84,73 @@ class UserController extends Controller
         $apiToken = Str::random(60); // Generate 60-char token
         $user->api_token = $apiToken; // Assign the token to the user
         $user->is_request = 0;
-        $user->status_id = 1;
+        $user->status_id = 1; // Set status to 1 for approved
         $user->save();
+
+        // Send approval email
+        Mail::send('emails.registration-status', [
+            'name' => $user->name,
+            'status' => 'approved'
+        ], function ($message) use ($user) {
+            $message->to($user->email)
+                ->subject('Registration Request Approved');
+        });
 
         return response()->json(['message' => 'User approved successfully'], 200);
     }
 
+    public function declineRequest(Request $request, $id)
+    {
+        $request->validate([
+            'reason' => 'required|string|min:10'
+        ]);
+
+        $user = User::find($id);
+
+        if (!$user) {
+            return response()->json(['message' => 'User not found'], 404);
+        }
+
+        $user->status_id = 0; // Set status to 0 for declined
+        $user->is_request = 2; // Set is_request to 2 for declined
+        $user->save();
+
+        // Send decline email
+        Mail::send('emails.registration-status', [
+            'name' => $user->name,
+            'status' => 'declined',
+            'reason' => $request->reason
+        ], function ($message) use ($user) {
+            $message->to($user->email)
+                ->subject('Registration Request Declined');
+        });
+
+        return response()->json(['message' => 'User registration declined'], 200);
+    }
     public function requestRegistration(Request $request)
     {
-        $query = User::where('is_request', 1)->with('accountType');
+        $query = User::query();
+
+        // Set status filter, default to pending (1) if not specified
+        $status = $request->has('status') ? $request->status : '1';
+        $query->where('is_request', $status);
+
+        // Filter by role (exclude role_id = 1)
+        $query->whereHas('role', function ($q) {
+            $q->where('id', '!=', 1);
+        });
+
+        // Filter by role (exclude role_id = 1 and handle role_id = 0 as "get all")
+        if ($request->has('role_id') && $request->role_id != 0) {
+            $query->where('role_id', $request->role_id);
+        }
+
+        // Filter by group (handle group_id = 0 as "get all")
+        if ($request->has('group_id') && $request->group_id != 0) {
+            $query->whereHas('accountType', function ($q) use ($request) {
+                $q->where('group_id', $request->group_id);
+            });
+        }
 
         if ($request->has('search')) {
             $search = $request->input('search');
@@ -93,7 +165,7 @@ class UserController extends Controller
             });
         }
 
-        return response()->json($query->get(), 200);
+        return response()->json($query->with(['accountType.account_group', 'role'])->get(), 200);
     }
     public function uploadUsers(Request $request)
     {
@@ -114,15 +186,25 @@ class UserController extends Controller
             foreach ($rows as $index => $row) {
                 if ($index === 0) continue; // skip header
 
-                $username = trim($row[0]); // 2nd column username
-                $email = trim($row[1]); // assuming 3rd column is email
+                // Get and trim required fields
+                $username = trim($row[0] ?? '');
+                $email = trim($row[1] ?? '');
+                $firstName = trim($row[2] ?? '');
+                $lastName = trim($row[3] ?? '');
 
-                $firstName = trim($row[2]);
-                $lastName = trim($row[3]);
-                $middleName = $row[4];
+                // Skip row if any required field is empty
+                if (empty($username) || empty($email) || empty($firstName) || empty($lastName)) {
+                    continue;
+                }
 
-                // ✅ Convert Excel serial number to Y-m-d date
+                $middleName = trim($row[4] ?? '');
+
+                // Convert Excel serial number to Y-m-d date
                 $birthdateRaw = $row[5];
+
+                // Get gender and phone
+                $gender = trim($row[6]);
+                $phone = trim($row[7]);
 
                 if (is_numeric($birthdateRaw)) {
                     // Convert Excel serial number to Carbon date
@@ -149,7 +231,12 @@ class UserController extends Controller
                     'role_id' => 2,
                     'status_id' => 1,
                     'is_request' => 0,
+                    'location_id' => $request->location_id,
+                    'group_id' => $request->group_id ?? $request->account_group_id ?? $request->accountGroupId,
                 ]);
+
+                // Get sex_id based on gender input
+                $sexId = strtolower($gender) === 'male' ? 1 : 2;
 
                 $user->details()->create([
                     'user_id' => $user->id,
@@ -157,22 +244,13 @@ class UserController extends Controller
                     'last_name' => $lastName,
                     'middle_name' => $middleName,
                     'birthdate' => $birthdate,
+                    'sex_id' => $sexId,
+                    'phone_number' => $phone,
                     'status_id' => 1,
                     'created_by' => auth()->id() ?? 1,
                 ]);
 
-                $selectedAccountTypes = $request->account_type_id ?? [];
-                $groupId = $request->account_group_id ?? null;
-                // If you also want to add account type and group info, map it from columns
-                foreach ($selectedAccountTypes as $typeId) {
-                    \App\Models\UserAccountType::create([
-                        'user_id' => $user->id,
-                        'account_type_id' => $typeId,
-                        'group_id' => $groupId,
-                        'status' => 1,
-                        'created_by' => auth()->id() ?? 1,
-                    ]);
-                }
+                // Removed account type assignments; group stored directly on users table
                 $createdUsers[] = $user;
             }
 
@@ -222,11 +300,11 @@ class UserController extends Controller
             if ($request->is_request === 1) {
                 $apiToken = null;
                 $status_id = 0;
-                $name =  $request->last_name . ' ' . $request->first_name;
+                $name =  $request->first_name . ' ' . $request->last_name;
             } else {
                 $apiToken = Str::random(60); // Generate 60-char token
                 $status_id = 1;
-                $name = $request->lastName . ' ' . $request->firstName;
+                $name = $request->firstName . ',' . $request->lastName;
             }
 
             $user = User::create([
@@ -235,9 +313,10 @@ class UserController extends Controller
                 'email' => $request->email,
                 'password' => Hash::make($request->password),
                 'api_token' => $apiToken,
-                'role_id' => $request->role ?? 3, // Ensure this is passed in the request
+                'role_id' => $request->role ?? 2, // Ensure this is passed in the request
                 'status_id' => $status_id,
                 'location_id' => $request->churchLocationId ?? $request->location,
+                'group_id' => $request->group_id ?? $request->account_group_id ?? $request->accountGroupId,
                 'is_request' => $request->is_request ?? 0,
             ]);
 
@@ -245,44 +324,17 @@ class UserController extends Controller
                 'user_id' => $user->id,
                 'first_name' => $request->first_name ?? $request->firstName,
                 'last_name' => $request->last_name ?? $request->lastName,
-                'middle_name' => $request->middle_name,
+                'middle_name' => $request->middle_name ?? $request->middleName,
                 'birthdate' => $request->birthdate,
                 'sex_id' => $request->gender,
                 'status_id' => 1,
                 'phone_number' => $request->phone,
-               
+
                 'created_by' => $user->id,
 
             ]);
 
-            $selectedAccountTypes = $request->account_type_id ?? [];
-
-            // Get existing account types for the user
-            $existingAccountTypes = \App\Models\UserAccountType::where('user_id', $user->id)->get();
-
-            $existingTypeIds = $existingAccountTypes->pluck('account_type_id')->toArray();
-
-            // Mark unchecked ones as inactive
-            foreach ($existingAccountTypes as $existing) {
-                if (!in_array($existing->account_type_id, $selectedAccountTypes)) {
-                    $existing->update(['status' => 2]); // mark as inactive
-                } else {
-                    $existing->update(['status' => 1]); // ensure active
-                }
-            }
-
-            // Add new ones that don't exist yet
-            foreach ($selectedAccountTypes as $typeId) {
-                if (!in_array($typeId, $existingTypeIds)) {
-                    \App\Models\UserAccountType::create([
-                        'user_id' => $user->id,
-                        'account_type_id' => $typeId,
-                        'group_id' => $request->account_group_id ?? $request->accountGroupId,
-                        'status' => 1,
-                        'created_by' => auth()->id() ?? 1,
-                    ]);
-                }
-            }
+            // Removed account type inserts; store single group on users table only
 
             DB::connection('mysql')->commit();
             return response()->json([
@@ -342,8 +394,7 @@ class UserController extends Controller
             'firstName' => 'required|string',
             'lastName' => 'required|string',
             'accountGroupId' => 'nullable|integer',
-            'account_type_id' => 'array',
-            'account_type_id.*' => 'integer|exists:account_types,id',
+            'group_id' => 'nullable|integer',
             'churchLocationId' => 'nullable|integer|exists:church_location,id',
         ]);
 
@@ -359,6 +410,7 @@ class UserController extends Controller
                 'email' => $request->email,
                 'role_id' => $request->role,
                 'location_id' => $request->churchLocationId ?? null,
+                'group_id' => $request->group_id ?? $request->accountGroupId,
             ]);
 
             if ($request->filled('password')) {
@@ -375,37 +427,9 @@ class UserController extends Controller
             $details->address = $request->address;
             $details->phone_number = $request->phone;
             $details->sex_id = $request->gender;
-                    $details->save();
+            $details->save();
 
-            // ✅ Handle Account Types
-            $selectedAccountTypes = $request->account_type_id ?? [];
-
-            // Get existing account types for the user
-            $existingAccountTypes = \App\Models\UserAccountType::where('user_id', $user->id)->get();
-
-            $existingTypeIds = $existingAccountTypes->pluck('account_type_id')->toArray();
-
-            // Mark unchecked ones as inactive
-            foreach ($existingAccountTypes as $existing) {
-                if (!in_array($existing->account_type_id, $selectedAccountTypes)) {
-                    $existing->update(['status' => 2]); // mark as inactive
-                } else {
-                    $existing->update(['status' => 1]); // ensure active
-                }
-            }
-
-            // Add new ones that don't exist yet
-            foreach ($selectedAccountTypes as $typeId) {
-                if (!in_array($typeId, $existingTypeIds)) {
-                    \App\Models\UserAccountType::create([
-                        'user_id' => $user->id,
-                        'account_type_id' => $typeId,
-                        'group_id' => $request->accountGroupId,
-                        'status' => 1,
-                        'created_by' => auth()->id() ?? 1,
-                    ]);
-                }
-            }
+            // Removed account type updates; group is directly assigned on users table
 
             DB::commit();
 
@@ -437,7 +461,7 @@ class UserController extends Controller
                 return response()->json(['message' => 'User not authenticated'], 401);
             }
 
-            $userWithDetails = User::with(['details', 'role', 'accountType'])
+            $userWithDetails = User::with(['details', 'role', 'group'])
                 ->find($user->id);
 
             // Structure data to use user.username and map fields properly
@@ -448,7 +472,7 @@ class UserController extends Controller
                 'email' => $userWithDetails->email,
                 'image' => $userWithDetails->image ? $userWithDetails->image : null, // Add image field with proper path
                 'role' => $userWithDetails->role,
-                'accountType' => $userWithDetails->accountType,
+                'group' => $userWithDetails->group,
                 // Map userdetails fields with proper naming
                 'first_name' => $userWithDetails->details->first_name ?? '',
                 'last_name' => $userWithDetails->details->last_name ?? '',
@@ -460,6 +484,12 @@ class UserController extends Controller
                 'municipal' => $userWithDetails->details->municipal ?? '',
                 'province' => $userWithDetails->details->province ?? '',
                 'sex_id' => $userWithDetails->details->sex_id ?? null,
+                // Family background and affiliation
+                'civil_status' => $userWithDetails->details->civil_status ?? '',
+                'nationality' => $userWithDetails->details->nationality ?? '',
+
+                'father_name' => $userWithDetails->details->father_name ?? '',
+                'mother_name' => $userWithDetails->details->mother_name ?? '',
             ];
 
             return response()->json([
@@ -491,6 +521,12 @@ class UserController extends Controller
             'province' => 'nullable|string|max:255',
             'sex_id' => 'nullable|integer|exists:sexes,id',
             'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
+            // Family background and affiliation
+            'civil_status' => 'nullable|string|max:255',
+            'nationality' => 'nullable|string|max:255',
+
+            'father_name' => 'nullable|string|max:255',
+            'mother_name' => 'nullable|string|max:255',
         ]);
 
         DB::beginTransaction();
@@ -508,17 +544,17 @@ class UserController extends Controller
                         unlink($oldImagePath);
                     }
                 }
-                
+
                 // Store new image using same pattern as events
                 $file = $request->file('image');
                 $filename = time() . '.' . $file->getClientOriginalExtension();
                 $destinationPath = public_path('storage/user-images');
-                
+
                 // Ensure the directory exists
                 if (!file_exists($destinationPath)) {
                     mkdir($destinationPath, 0755, true);
                 }
-                
+
                 $file->move($destinationPath, $filename);
                 $imagePath = 'user-images/' . $filename;
             }
@@ -543,6 +579,12 @@ class UserController extends Controller
                 'municipal' => $request->municipal,
                 'province' => $request->province,
                 'sex_id' => $request->sex_id, // Handle sex_id in userdetails
+                // Family background and affiliation
+                'civil_status' => $request->civil_status,
+                'nationality' => $request->nationality,
+
+                'father_name' => $request->father_name,
+                'mother_name' => $request->mother_name,
             ]);
             $details->save();
 
@@ -568,6 +610,10 @@ class UserController extends Controller
                 'municipal' => $updatedUser->details->municipal ?? '',
                 'province' => $updatedUser->details->province ?? '',
                 'sex_id' => $updatedUser->details->sex_id ?? null,
+                // Family background and affiliation
+                'civil_status' => $updatedUser->details->civil_status ?? '',
+                'nationality' => $updatedUser->details->nationality ?? '',
+
             ];
 
             return response()->json([
@@ -594,7 +640,7 @@ class UserController extends Controller
 
         try {
             $user = $request->user();
-            
+
             // Check if current password is correct
             if (!Hash::check($request->current_password, $user->password)) {
                 return response()->json([
@@ -618,6 +664,85 @@ class UserController extends Controller
                 'message' => 'Failed to change password',
                 'error' => $e->getMessage()
             ], 500);
+        }
+    }
+
+    public function generateRegistrationOtp(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'email' => 'required|email',
+            'registration_data' => 'required|array',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Invalid input', 'errors' => $validator->errors()], 422);
+        }
+
+        try {
+            // Check if email already exists
+            if (User::where('email', $request->email)->exists()) {
+                return response()->json(['message' => 'Email already registered'], 400);
+            }
+
+            // Generate 6-digit OTP
+            $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+
+            // Store OTP with registration data
+            RegistrationOtp::updateOrCreate(
+                ['email' => $request->email],
+                [
+                    'otp' => Hash::make($otp),
+                    'registration_data' => $request->registration_data,
+                    'expires_at' => now()->addMinutes(10),
+                ]
+            );
+
+            // Send OTP email
+            Mail::send('emails.registration-otp', ['otp' => $otp], function ($message) use ($request) {
+                $message->to($request->email)
+                    ->subject('UCCP Registration OTP');
+            });
+
+            return response()->json(['message' => 'OTP sent successfully']);
+        } catch (\Exception $e) {
+            return response()->json(['message' => 'Failed to send OTP', 'error' => $e->getMessage()], 500);
+        }
+    }
+
+    public function verifyRegistrationOtp(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'email' => 'required|email',
+            'otp' => 'required|string|size:6',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Invalid input', 'errors' => $validator->errors()], 422);
+        }
+
+        try {
+            $registrationOtp = RegistrationOtp::where('email', $request->email)
+                ->where('expires_at', '>', now())
+                ->first();
+
+            if (!$registrationOtp) {
+                return response()->json(['message' => 'OTP expired or not found'], 400);
+            }
+
+            if (!Hash::check($request->otp, $registrationOtp->otp)) {
+                return response()->json(['message' => 'Invalid OTP'], 400);
+            }
+
+            // Process registration with stored data
+            $registrationData = $registrationOtp->registration_data;
+            $result = $this->register(new Request($registrationData));
+
+            // Delete the OTP record after successful registration
+            $registrationOtp->delete();
+
+            return $result;
+        } catch (\Exception $e) {
+            return response()->json(['message' => 'Failed to verify OTP', 'error' => $e->getMessage()], 500);
         }
     }
 }

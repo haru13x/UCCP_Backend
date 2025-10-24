@@ -37,8 +37,8 @@ class EventController extends Controller
             ], 200);
         }
 
+        // Find event by barcode (no eventtype relationship needed)
         $event = Event::where('barcode', $barcode)
-            ->with(['eventModes.eventType']) // eager load if needed
             ->orderBy('start_date', 'desc')
             ->first();
 
@@ -49,40 +49,18 @@ class EventController extends Controller
             ], 200);
         }
 
-        // Get user's account types through the proper relationship chain
+        // Ensure user is authenticated
         $user = $request->user();
-        if (!$user || !$user->accountType) {
+        if (!$user) {
             return response()->json([
-                'message' => 'User account type information not found.',
-                'type' => 2
-            ], 200);
-        }
-        
-        $userAccountTypes = $user->accountType->pluck('accountType.code')->toArray();
-
-        // Get event allowed types through the proper relationship chain
-        $eventAllowedTypes = [];
-        if ($event->eventModes && $event->eventModes->count() > 0) {
-            $eventAllowedTypes = $event->eventModes->map(function($mode) {
-                return $mode->eventType ? $mode->eventType->code : null;
-            })->filter()->toArray();
-        }
-
-        // Check if there's any intersection
-        if (empty($eventAllowedTypes) || empty(array_intersect($userAccountTypes, $eventAllowedTypes))) {
-            $userTypesStr = implode(', ', $userAccountTypes);
-            $eventTypesStr = implode(', ', $eventAllowedTypes);
-            return response()->json([
-                'message' => 'Your account type is not allowed to attend this event.',
-                'user_types' => $userTypesStr,
-                'event_types' => $eventTypesStr,
+                'message' => 'Authentication required.',
                 'type' => 2
             ], 200);
         }
 
         // Check if user is registered for this event
         $registration = EventRegistration::where('event_id', $event->id)
-            ->where('user_id', $request->user()->id)
+            ->where('user_id', $user->id)
             ->first();
 
         if (!$registration) {
@@ -97,15 +75,11 @@ class EventController extends Controller
             $registration->update([
                 'is_attend' => true,
                 'attend_time' => now(),
-                'updated_by' => $request->user()->id
+                'updated_by' => $user->id
             ]);
         }
 
-        // Append event_types for response
-        $event->event_types = $event->eventModes && $event->eventModes->count() > 0
-            ? $event->eventModes->map(function($mode) { return $mode->eventType; })->filter()
-            : collect([]);
-
+        // Return success response without eventtype data
         return response()->json([
             'message' => $registration->getOriginal('is_attend') ? 'Attendance already marked' : 'Attendance marked successfully',
             'event' => $event,
@@ -136,19 +110,22 @@ class EventController extends Controller
     {
         $query = Event::query();
 
-        // Filter by user's location_id if role is not 1
-        if (auth()->check() && auth()->user()->role_id != 1) {
-            $userLocationId = auth()->user()->location_id;
-            $query->where(function($q) use ($userLocationId) {
-                // Events with EventLocation entries matching user's location
-                $q->whereHas('eventLocations', function ($subQ) use ($userLocationId) {
-                    $subQ->where('location_id', $userLocationId);
-                })
-                // OR events created by users from the same location (for backward compatibility)
-                ->orWhereHas('user', function ($subQ) use ($userLocationId) {
-                    $subQ->where('location_id', $userLocationId);
+        // Filter events based on user role and group
+        if (auth()->check()) {
+            $user = auth()->user();
+            
+            // Admin (role_id = 1) can see all events
+            if ($user->role_id != 1) {
+                $userGroupId = $user->group_id;
+                
+                // For non-admin users:
+                // 1. Show conference events only if they have an active event mode matching user's group
+                // 2. Show non-conference events only if they have an active event mode matching user's group
+                $query->whereHas('eventModes', function($modeQ) use ($userGroupId) {
+                    $modeQ->where('account_group_id', $userGroupId)
+                          ->where('status_id', 1);
                 });
-            });
+            }
         }
 
         // Filter by status_id (e.g. 1 = active, 2 = cancelled)
@@ -180,14 +157,24 @@ class EventController extends Controller
             $query->where('title', 'like', '%' . $request->search . '%');
         }
 
-        $events = $query->with(['locations', 'eventModes.eventType', 'eventModes.eventGroup'])->orderBy('start_date', 'desc')->get()
+        // Filter by category (account group) - admin-only
+        if ($request->has('category') && !empty($request->category)) {
+            $isAdmin = auth()->check() && auth()->user()->role_id == 1;
+            if ($isAdmin) {
+                $catParam = $request->category;
+                $catIds = is_array($catParam) ? $catParam : array_map('trim', explode(',', $catParam));
+                $catIds = array_filter($catIds, function ($v) { return $v !== ''; });
+                $catIdsInt = array_map('intval', $catIds);
+
+                $query->whereHas('eventModes', function($modeQ) use ($catIdsInt) {
+                    $modeQ->whereIn('account_group_id', $catIdsInt)
+                          ->where('status_id', 1);
+                });
+            }
+        }
+
+        $events = $query->with(['locations', 'eventModes.eventGroup'])->orderBy('start_date', 'desc')->get()
             ->map(function ($event) {
-                $eventTypes = $event->eventModes && $event->eventModes->count() > 0
-                    ? $event->eventModes->map(function($mode) { return $mode->eventType; })->filter()
-                    : collect([]);
-
-                $event->event_types = $eventTypes;
-
                 // Add account group IDs for frontend
                 $accountGroupIds = $event->eventModes
                     ->pluck('account_group_id')
@@ -196,23 +183,6 @@ class EventController extends Controller
                     ->values()
                     ->toArray();
                 $event->accountGroupIds = $accountGroupIds;
-
-                // Add participants data for frontend
-                $participants = $event->eventModes && $event->eventModes->count() > 0
-                    ? $event->eventModes->pluck('account_type_id')->filter()->toArray()
-                    : [];
-                $event->participants = $participants;
-
-                // Add participantData for frontend
-                $participantData = $event->eventModes && $event->eventModes->count() > 0
-                    ? $event->eventModes->map(function($mode) {
-                        return [
-                            'account_type_id' => $mode->account_type_id,
-                            'account_group_id' => $mode->account_group_id
-                        ];
-                    })->toArray()
-                    : [];
-                $event->participantData = $participantData;
 
                 // Override category field with comma-separated account group IDs
                 $event->category = implode(',', $accountGroupIds);
@@ -249,15 +219,9 @@ class EventController extends Controller
     public function getEvent($id)
     {
         $query = Event::query();
-        $event = $query->with(['locations', 'eventModes.eventType', 'eventModes.eventGroup'])->where('id', $id)
+        $event = $query->with(['locations', 'eventModes.eventGroup'])->where('id', $id)
             ->orderBy('start_date', 'desc')->get()
             ->map(function ($event) {
-                $eventTypes = $event->eventModes && $event->eventModes->count() > 0
-                    ? $event->eventModes->map(function($mode) { return $mode->eventType; })->filter()
-                    : collect([]);
-
-                $event->event_types = $eventTypes;
-
                 // Add account group IDs for frontend
                 $accountGroupIds = $event->eventModes
                     ->pluck('account_group_id')
@@ -266,23 +230,6 @@ class EventController extends Controller
                     ->values()
                     ->toArray();
                 $event->accountGroupIds = $accountGroupIds;
-
-                // Add participants data for frontend
-                $participants = $event->eventModes && $event->eventModes->count() > 0
-                    ? $event->eventModes->pluck('account_type_id')->filter()->toArray()
-                    : [];
-                $event->participants = $participants;
-
-                // Add participantData for frontend
-                $participantData = $event->eventModes && $event->eventModes->count() > 0
-                    ? $event->eventModes->map(function($mode) {
-                        return [
-                            'account_type_id' => $mode->account_type_id,
-                            'account_group_id' => $mode->account_group_id
-                        ];
-                    })->toArray()
-                    : [];
-                $event->participantData = $participantData;
 
                 // Override category field with comma-separated account group IDs
                 $event->category = implode(',', $accountGroupIds);
@@ -337,10 +284,7 @@ class EventController extends Controller
             ]);
 
 
-            $participants = json_decode($request->input('participants', '[]'), true);
-            $participantData = json_decode($request->input('participantData', '[]'), true);
-
-            // Remove if accidentally included
+            // Remove legacy participant payloads (account types) — categories (account groups) only
 
             if ($request->hasFile('image')) {
                 $file = $request->file('image');
@@ -362,124 +306,88 @@ class EventController extends Controller
             $validated['status_id'] = 1;
             $validated['created_by'] = $request->user->id;
 
-            // If no location_id is provided, use the authenticated user's location_id
-            if (empty($validated['location_id']) && $request->user && $request->user->location_id) {
+            // Location behavior: only non-conference events have a single location_id
+            if ($request->isconference) {
+                // Conference events are open to all locations; clear location_id on event
+                $validated['location_id'] = null;
+            } else if (empty($validated['location_id']) && $request->user && $request->user->location_id) {
+                // For non-conference, default to creator's location when not provided
                 $validated['location_id'] = $request->user->location_id;
             }
 
             $event = Event::create($validated);
 
-            // Handle locations - only for conference events
-            if ($request->isconference && $request->has('conference_locations')) {
-                // Handle multiple locations for conference events
-                $conferenceLocations = json_decode($request->input('conference_locations', '[]'), true);
-                if (is_array($conferenceLocations)) {
-                    foreach ($conferenceLocations as $locationData) {
-                        // Handle both array of IDs and array of objects
-                        if (is_array($locationData)) {
-                            // If it's an object with location_id property
-                            $locationId = $locationData['location_id'] ?? null;
-                        } else {
-                            // If it's just an ID (integer or string)
-                            $locationId = $locationData;
-                        }
-
-                        if ($locationId === null || !is_numeric($locationId)) {
-                            Log::error('Invalid location_id for conference location:', ['locationData' => $locationData]);
-                            continue;
-                        }
-
-                        \App\Models\EventLocation::create([
-                            'event_id' => $event->id,
-                            'location_id' => (int)$locationId,
-                        ]);
-                    }
-                }
+            // Handle locations: conference => no specific locations; non-conference => single location
+            if ($request->isconference) {
+                // Do not create event_locations for conference events (open to all)
             } else {
-                EventLocation::updateOrCreate(
-                    [
-                        'event_id' => $event->id,
-                        'location_id' => auth()->user()->location_id,
-                    ],
-                    [
-                        'event_id' => $event->id,
-                        'location_id' => auth()->user()->location_id,
-                        'created_at' => Carbon::now()
-
-                    ]
-                );
+                $singleLocationId = $event->location_id ?? (auth()->user()->location_id ?? null);
+                if ($singleLocationId) {
+                    EventLocation::updateOrCreate(
+                        [
+                            'event_id' => $event->id,
+                            'location_id' => (int)$singleLocationId,
+                        ],
+                        [
+                            'event_id' => $event->id,
+                            'location_id' => (int)$singleLocationId,
+                            'created_at' => Carbon::now()
+                        ]
+                    );
+                }
             }
             // For regular events, only use venue field (no event_locations table)
 
             // Handle category as comma-separated account group IDs
-            if (!empty($validated['category'])) {
-                $categoryIds = explode(',', $validated['category']);
-                foreach ($categoryIds as $groupId) {
-                    if (!empty(trim($groupId))) {
-                        // Get all account types for this group
-                        $accountTypes = \App\Models\AccountType::where('group_id', trim($groupId))->get();
+            // Only admins can set arbitrary categories; non-admins are forced to their own group
+            $isAdmin = false;
+            if (auth()->check() && auth()->user()->role_id == 1) { $isAdmin = true; }
+            if (isset($request->user) && isset($request->user->role_id) && $request->user->role_id == 1) { $isAdmin = true; }
 
-                        foreach ($accountTypes as $accountType) {
-                            EventMode::create([
-                                'event_id' => $event->id,
-                                'account_type_id' => $accountType->id,
-                                'account_group_id' => trim($groupId),
-                                'status_id' => 1,
-                                'created_by' => $request->user->id,
-                            ]);
-                        }
-                    }
-                }
-            }
-
-            // Handle participant data with multiple account groups
-            if (!empty($participantData)) {
-                // Use new participantData structure with account_group_id for each participant
-                foreach ($participantData as $participant) {
-                    // Validate account_group_id is not null
-                    $accountGroupId = $participant['account_group_id'] ?? null;
-                    if ($accountGroupId === null) {
-                        Log::error('Store: account_group_id is null for participant', [
-                            'participant' => $participant,
-                            'participantData' => $participantData
-                        ]);
-                        continue; // Skip this participant
-                    }
-
-                    EventMode::create([
-                        'account_type_id' => $participant['account_type_id'],
-                        'event_id' => $event->id,
-                        'status_id' => 1,
-                        'account_group_id' => $accountGroupId,
-                        'created_by' => $request->user->id,
-                    ]);
-                }
+            $categoryIds = [];
+            if ($isAdmin && !empty($validated['category'])) {
+                $categoryIds = array_filter(array_map('trim', explode(',', $validated['category'])));
             } else {
-                // Fallback to old structure for backward compatibility
-                foreach ($participants as $participantId) {
-                    EventMode::create([
-                        'account_type_id' => $participantId,
-                        'event_id' => $event->id,
-                        'status_id' => 1,
-                        'account_group_id' => $request->account_group_id,
-                        'created_by' => $request->user->id,
-                    ]);
+                // Force to creator's group when not admin
+                $forcedGroup = null;
+                if (isset($request->user) && isset($request->user->group_id)) {
+                    $forcedGroup = $request->user->group_id;
+                } elseif (auth()->check()) {
+                    $forcedGroup = auth()->user()->group_id ?? null;
+                }
+                if ($forcedGroup) {
+                    $categoryIds = [ (string)$forcedGroup ];
                 }
             }
+
+            // First, deactivate all existing event modes for this event
+            EventMode::where('event_id', $event->id)
+                ->update(['status_id' => 2]); // Set status to inactive
+
+            // Then create or reactivate event modes for the current categories
+            foreach ($categoryIds as $groupId) {
+                if (!empty(trim($groupId))) {
+                    EventMode::updateOrCreate(
+                        [
+                            'event_id' => $event->id,
+                            'account_group_id' => (int)trim($groupId),
+                        ],
+                        [
+                            'status_id' => 1, // Set status to active
+                            'created_by' => $request->user->id,
+                        ]
+                    );
+                }
+            }
+
+            // Participant creation already handled via categories above; no participantData processing
 
             $processedUserIds = []; // Store user IDs that we've already notified
 
-            // Get participant IDs for notifications
-            $participantIds = [];
-            if (!empty($participantData)) {
-                $participantIds = array_column($participantData, 'account_type_id');
-            } else {
-                $participantIds = $participants;
-            }
-
-            foreach ($participantIds as $participantId) {
+            // Notify users belonging to selected groups
+            foreach ($categoryIds as $groupId) {
                 $users = UserAccountType::with('user')
-                    ->where('account_type_id', $participantId)
+                    ->where('group_id', (int)trim($groupId))
                     ->where('status', 1)
                     ->get();
 
@@ -614,8 +522,10 @@ class EventController extends Controller
                 $validated['image'] = 'event-images/' . $filename;
             }
 
-            // If no location_id is provided, use the authenticated user's location_id
-            if (empty($validated['location_id']) && $request->user && $request->user->location_id) {
+            // Location behavior: only non-conference events have a single location_id
+            if ($request->isconference) {
+                $validated['location_id'] = null; // clear any incoming location for conferences
+            } else if (empty($validated['location_id']) && $request->user && $request->user->location_id) {
                 $validated['location_id'] = $request->user->location_id;
             }
 
@@ -623,48 +533,25 @@ class EventController extends Controller
             $event = Event::findOrFail($id);
             $event->update($validated);
 
-            // Handle locations - only for conference events
-            // Always remove existing event locations first
+            // Handle locations: conference => none; non-conference => single location
             \App\Models\EventLocation::where('event_id', $event->id)->delete();
-
-            if ($request->isconference && $request->has('conference_locations')) {
-                // Handle multiple locations for conference events
-                $conferenceLocations = json_decode($request->input('conference_locations', '[]'), true);
-                if (is_array($conferenceLocations)) {
-                    foreach ($conferenceLocations as $locationData) {
-                        // Handle both array of IDs and array of objects
-                        if (is_array($locationData)) {
-                            // If it's an object with location_id property
-                            $locationId = $locationData['location_id'] ?? null;
-                        } else {
-                            // If it's just an ID (integer or string)
-                            $locationId = $locationData;
-                        }
-
-                        if ($locationId === null || !is_numeric($locationId)) {
-                            Log::error('Invalid location_id for conference location:', ['locationData' => $locationData]);
-                            continue;
-                        }
-
-                        \App\Models\EventLocation::create([
-                            'event_id' => $event->id,
-                            'location_id' => (int)$locationId,
-                        ]);
-                    }
-                }
+            if ($request->isconference) {
+                // Do not attach specific locations for conference events
             } else {
-                // For non-conference events, create/update EventLocation with user's location_id
-                EventLocation::updateOrCreate(
-                    [
-                        'event_id' => $event->id,
-                        'location_id' => auth()->user()->location_id,
-                    ],
-                    [
-                        'event_id' => $event->id,
-                        'location_id' => auth()->user()->location_id,
-                        'updated_at' => Carbon::now()
-                    ]
-                );
+                $singleLocationId = $event->location_id ?? (auth()->user()->location_id ?? null);
+                if ($singleLocationId) {
+                    EventLocation::updateOrCreate(
+                        [
+                            'event_id' => $event->id,
+                            'location_id' => (int)$singleLocationId,
+                        ],
+                        [
+                            'event_id' => $event->id,
+                            'location_id' => (int)$singleLocationId,
+                            'updated_at' => Carbon::now()
+                        ]
+                    );
+                }
             }
             // For regular events, only use venue field (no event_locations table)
 
@@ -672,30 +559,31 @@ class EventController extends Controller
             // We'll recreate them based on participant data
             EventMode::where('event_id', $event->id)->delete();
 
-            // Create new event modes (participants) based on participantData
-            $participantData = json_decode($request->input('participantData', '[]'), true);
+            // Rebuild EventModes based on categories only; ignore participantData entirely
+            $isAdmin = false;
+            if (auth()->check() && (auth()->user()->role_id == 1)) { $isAdmin = true; }
+            if (isset($request->user) && isset($request->user->role_id) && $request->user->role_id == 1) { $isAdmin = true; }
 
-            if (!empty($participantData) && is_array($participantData)) {
-                // Use participantData structure with account_group_id information
-                foreach ($participantData as $participant) {
-                    // Ensure participant is an array and has required fields
-                    if (!is_array($participant)) {
-                        Log::error('Invalid participant data structure:', ['participant' => $participant]);
-                        continue;
-                    }
+            $categoryStr = $request->input('category', '');
+            $categoryIds = [];
+            if ($isAdmin && !empty($categoryStr)) {
+                $categoryIds = array_filter(array_map('trim', explode(',', $categoryStr)));
+            } else {
+                $forcedGroup = null;
+                if (isset($request->user) && isset($request->user->group_id)) {
+                    $forcedGroup = $request->user->group_id;
+                } elseif (auth()->check()) {
+                    $forcedGroup = auth()->user()->group_id ?? null;
+                }
+                if ($forcedGroup) { $categoryIds = [ (string)$forcedGroup ]; }
+            }
 
-                    $accountTypeId = $participant['account_type_id'] ?? null;
-                    $accountGroupId = $participant['account_group_id'] ?? null;
-
-                    if ($accountTypeId === null || $accountGroupId === null) {
-                        Log::error('Missing required fields for participant:', $participant);
-                        continue; // Skip this participant if required fields are missing
-                    }
-
+            foreach ($categoryIds as $groupId) {
+                if (!empty(trim($groupId))) {
+                    // Create a single EventMode per group (account types removed)
                     EventMode::create([
                         'event_id' => $event->id,
-                        'account_type_id' => (int)$accountTypeId,
-                        'account_group_id' => (int)$accountGroupId,
+                        'account_group_id' => (int)trim($groupId),
                         'status_id' => 1,
                         'created_by' => auth()->id() ?? 1,
                         'created_at' => now(),
@@ -865,24 +753,38 @@ class EventController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
+        $events = Event::query();
+
         if ($user->role_id != 1) {
-            $userAccountTypeIds = $user->accountType->pluck('account_type_id');
-            $userLocationId = auth()->user()->location_id;
-            $events = Event::whereHas('eventModes', function ($query) use ($userAccountTypeIds) {
-                $query->whereIn('account_type_id', $userAccountTypeIds);
-            })
-                ->whereDoesntHave('eventRegistrations', function ($q) use ($userId) {
-                    $q->where('user_id', $userId); // 👈 excludes events already registered by user
+            $userLocationId = $user->location_id;
+            $userGroupId = $user->group_id;
+
+            $events->where(function ($query) use ($userLocationId, $userGroupId) {
+                // For conference events: only filter by group_id in event modes
+                $query->where(function ($q) use ($userGroupId) {
+                    $q->where('isconference', true)
+                      ->whereHas('eventModes', function ($em) use ($userGroupId) {
+                          $em->where('account_group_id', $userGroupId)
+                             ->where('status_id', 1);
+                      });
                 })
-                ->whereHas('eventLocations', function ($q) use ($userLocationId) {
-                    $q->where('location_id', $userLocationId);
+                // For non-conference events: filter by both location and group_id
+                ->orWhere(function ($q) use ($userLocationId, $userGroupId) {
+                    $q->where('isconference', false)
+                      ->whereHas('eventLocations', function ($el) use ($userLocationId) {
+                          $el->where('location_id', $userLocationId);
+                      })
+                      ->whereHas('eventModes', function ($em) use ($userGroupId) {
+                          $em->where('account_group_id', $userGroupId)
+                             ->where('status_id', 1);
+                      });
                 });
-        } else {
-            $events = Event::query();
-            $events->whereDoesntHave('eventRegistrations', function ($q) use ($userId) {
-                $q->where('user_id', $userId); // 👈 excludes events already registered by user
             });
         }
+
+        $events->whereDoesntHave('eventRegistrations', function ($q) use ($userId) {
+            $q->where('user_id', $userId); // Excludes events already registered by user
+        });
 
         if ($request->has('search')) {
             $search = $request->search;
@@ -897,15 +799,15 @@ class EventController extends Controller
             $events->whereDate('start_date', '<', Carbon::today());
         }
 
-        $event = $events->orderBy('start_date', 'desc')->get()
-            ->map(function ($event) {
-                $eventTypes = $event->eventModes && $event->eventModes->count() > 0
-                    ? $event->eventModes->map(function($mode) { return $mode->eventType; })->filter()
-                    : collect([]);
+        $event = $events->orderBy('start_date', 'desc')->get();
+            // ->map(function ($event) {
+            //     $eventTypes = $event->eventModes && $event->eventModes->count() > 0
+            //         ? $event->eventModes->map(function($mode) { return $mode->eventType; })->filter()
+            //         : collect([]);
 
-                $event->event_types = $eventTypes;
-                return $event;
-            });
+            //     $event->event_types = $eventTypes;
+            //     return $event;
+            // });
 
         return response()->json($event, 200);
     }
@@ -984,21 +886,23 @@ class EventController extends Controller
     }
     public function myCalendarList(Request $request)
     {
-        $userId = $request->user->id;
+        $user = $request->user();
+        if (!$user) {
+            return response()->json([], 200);
+        }
+        $userId = $user->id;
 
         $query = Event::whereHas('eventRegistrations', function ($q) use ($userId) {
             $q->where('user_id', $userId);
         });
-        $date = Carbon::parse($request->date)->format('Y-m-d');
-        if ($date) {
 
+        if ($request->filled('date')) {
+            $date = Carbon::parse($request->date)->format('Y-m-d');
             $query->whereDate('start_date', $date);
         }
 
-
-
-
-        return $query->with(['eventPrograms', 'eventsSponser'])->get();
+        // Return only core event fields; no heavy relationships for mobile calendar
+        return response()->json($query->orderBy('start_date', 'asc')->get(), 200);
     }
 
     public function attendance(Request $request)
@@ -1596,5 +1500,58 @@ class EventController extends Controller
             'status' => true,
             'data' => $notification ? [$notification] : []
         ]);
+    }
+
+    // Returns event overview counts for registrations, attendance, and reviews
+    public function overview($eventId)
+    {
+        $event = Event::find($eventId);
+        if (!$event) {
+            return response()->json(['message' => 'Event not found'], 404);
+        }
+
+        $registrationsTotal = EventRegistration::where('event_id', $eventId)->count();
+        $registrationsCancelled = EventRegistration::where('event_id', $eventId)->where('statusId', 2)->count();
+        $attended = EventRegistration::where('event_id', $eventId)->where('is_attend', 1)->count();
+        $absent = max($registrationsTotal - $attended, 0);
+        $reviewsCount = Review::where('event_id', $eventId)->count();
+        $avgRating = Review::where('event_id', $eventId)->avg('rating');
+
+        // Compute category averages from category_rating (singular) joined to reviews
+        $categoryAverages = DB::table('category_rating')
+            ->join('reviews', 'category_rating.rating_id', '=', 'reviews.id')
+            ->where('reviews.event_id', $eventId)
+            ->selectRaw('AVG(category_rating.venue) as venue, AVG(category_rating.speaker) as speaker, AVG(category_rating.event) as events, AVG(category_rating.food) as foods, AVG(category_rating.accommodation) as accommodation')
+            ->first();
+
+        return response()->json([
+            'event' => [
+                'id' => $event->id,
+                'title' => $event->title,
+                'start_date' => $event->start_date,
+                'start_time' => $event->start_time,
+                'isconference' => $event->isconference,
+            ],
+            'registrations' => [
+                'total' => $registrationsTotal,
+                'cancelled' => $registrationsCancelled,
+                'active' => max($registrationsTotal - $registrationsCancelled, 0),
+            ],
+            'attendance' => [
+                'present' => $attended,
+                'absent' => $absent,
+            ],
+            'reviews' => [
+                'count' => $reviewsCount,
+                'avg_rating' => round($avgRating ?? 0, 2),
+                'category_averages' => [
+                    'venue' => round(($categoryAverages->venue ?? 0), 2),
+                    'speaker' => round(($categoryAverages->speaker ?? 0), 2),
+                    'events' => round(($categoryAverages->events ?? 0), 2),
+                    'foods' => round(($categoryAverages->foods ?? 0), 2),
+                    'accommodation' => round(($categoryAverages->accommodation ?? 0), 2),
+                ],
+            ],
+        ], 200);
     }
 }
