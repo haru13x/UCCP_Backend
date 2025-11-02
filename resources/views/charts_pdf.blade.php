@@ -44,7 +44,8 @@
 
         .report-header h1 {
             font-size: 20px;
-            font-weight: bold;
+            font-weight: 800; /* stronger for header */
+            letter-spacing: 0.3px;
             color: #ffffff;
             margin: 0;
         }
@@ -154,8 +155,8 @@
             background: #ffffff;
             border: 1px solid #e2e8f0;
             border-radius: 6px;
-            padding: 6px;
-            height: 220px;
+            padding: 4px; /* slightly tighter */
+            height: 200px; /* compact height */
             display: flex;
             flex-direction: column;
         }
@@ -170,10 +171,10 @@
 
         .chart-caption {
             font-size: 10px;
-            color: #64748b;
-            margin-top: 6px;
+            color: #334155; /* slightly stronger */
+            margin-top: 4px;
             font-weight: 600;
-            padding: 4px;
+            padding: 3px;
             background: #f8fafc;
             border-radius: 4px;
         }
@@ -243,7 +244,10 @@
 
     <!-- Global Report Header -->
     <div class="report-header">
-        <h1>Event  Report</h1>
+        <div>
+            <h1>Event Report</h1>
+            <div class="sub">Generated on {{ now()->format('M d, Y') }}</div>
+        </div>
         <p>Period: {{ date('M d, Y', strtotime($fromDate)) }} – {{ date('M d, Y', strtotime($toDate)) }}</p>
     </div>
 
@@ -267,38 +271,10 @@
                 <!-- Event Body -->
                 <div class="event-body">
 
-                    <!-- Description -->
+               
                  
 
-                    <!-- Info Grid -->
-                    <div class="info-grid">
-                        <div class="info-item">
-                            <span class="info-label">Location:</span>
-                            <span class="info-value">{{ $eventData[$event->id]['locationText'] }}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Mode:</span>
-                            <span class="info-value">
-                                {{ $event->eventMode?->eventType?->name ?? 'N/A' }}
-                                @if($event->eventMode?->name)
-                                    ({{ $event->eventMode?->name }})
-                                @endif
-                            </span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Status:</span>
-                            <span class="info-value">
-                                {{ $event->status_id == 1 ? 'Active' : 'Completed' }}
-                            </span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Total Registered:</span>
-                            <span class="info-value">
-                                {{ $eventData[$event->id]['registered'] }}
-                            </span>
-                        </div>
-                    </div>
-
+                   
                     <!-- Stats -->
                        @if($event->description)
                         <div class="event-description">
@@ -321,7 +297,7 @@
                                 <div class="chart-wrapper">
                                     <img src="{{ $eventData[$event->id]['genderChartUrl'] }}" 
                                          alt="Gender Distribution">
-                                    <div class="chart-caption">Gender Distribution</div>
+                                    <div class="chart-caption">Gender Distribution (Male, Female, Other)</div>
                                 </div>
                             </td>
                         </tr>

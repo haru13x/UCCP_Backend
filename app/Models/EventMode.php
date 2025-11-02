@@ -10,7 +10,7 @@ class EventMode extends Model
     use HasFactory;
      protected $guarded = [];
     protected $table = 'event_modes';
-    
+    protected $with = ['eventGroup'];
     public function eventGroup(){
         return $this->belongsTo(AccountGroup::class,'account_group_id','id');
     }
