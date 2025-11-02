@@ -40,7 +40,7 @@ Route::middleware('auth.token')->group(function () {
     Route::post('/update-events', [EventController::class, 'update']);
     Route::post('/event-registration/{id}', [EventController::class, 'eventRegisteration']);
     Route::get('/isregistered/{id}', [EventController::class, 'isRegistered']);
-    Route::get('get-organizer',[UserController::class ,'getOrganizer']);
+    Route::get('get-organizer', [UserController::class, 'getOrganizer']);
     Route::post('get-event-registered/{id}', [EventController::class, 'getEventRegisteredUsers']);
     Route::post('event-registration-multiple', [EventController::class, 'eventMultipleRegisteration']);
     Route::post('mark-attend', [EventController::class, 'attendance']);
@@ -58,14 +58,14 @@ Route::middleware('auth.token')->group(function () {
     Route::post('/account-groups', [AccountGroupController::class, 'store']);
     Route::put('/account-groups/{id}', [AccountGroupController::class, 'update']);
     Route::get('/account-types/{groupId}', [AccountGroupController::class, 'getTypesByGroup']);
-    
+
     // Account Types CRUD routes with filtering
     Route::get('/account-types', [AccountTypeController::class, 'index']);
     Route::post('/account-types', [AccountTypeController::class, 'store']);
     Route::get('/account-types/show/{id}', [AccountTypeController::class, 'show']);
     Route::put('/account-types/{id}', [AccountTypeController::class, 'update']);
     Route::delete('/account-types/{id}', [AccountTypeController::class, 'destroy']);
-    
+
     // Church Location CRUD routes
     Route::get('/church-locations', [ChurchLocationController::class, 'index']);
     Route::post('/church-locations', [ChurchLocationController::class, 'store']);
@@ -77,33 +77,36 @@ Route::middleware('auth.token')->group(function () {
     Route::get('/qrcodes/{eventId}', [QRCodeController::class, 'get']);
     Route::post('/qrcodes/generate/{eventId}', [QRCodeController::class, 'generate']);
 
-     Route::post('events-list/{type}', [EventController::class, 'list']);
+    Route::post('events-list/{type}', [EventController::class, 'list']);
     Route::post('scan-event', [EventController::class, 'scanEvent']);
     Route::get('my-events-list/{filter?}', [EventController::class, 'myEventList']);
     Route::put('/cancel-event/{id}', [EventController::class, 'cancelEvent']);
     Route::post('myCalendarList', [EventController::class, 'myCalendarList']);
     // routes/api.php
     Route::post('/generate-event-report', [EventController::class, 'generatePdf']);
-        Route::get('/notifications/new', [EventController::class, 'getNewNotifications']);
+    Route::get('/notifications/new', [EventController::class, 'getNewNotifications']);
+        Route::get('/notifications/all', [EventController::class, 'getAllNotifications']);
+    Route::get('/notifications/recent', [EventController::class, 'getRecentNotifications']);
+    Route::post('/notifications/{id}/read', [EventController::class, 'markNotificationRead']);
 
-        Route::get('/events/{eventId}/reviews', [EventController::class, 'getReviews']);
-        Route::get('/events/{eventId}/overview', [EventController::class, 'overview']);
+    Route::get('/events/{eventId}/reviews', [EventController::class, 'getReviews']);
+    Route::get('/events/{eventId}/overview', [EventController::class, 'overview']);
     Route::post('events/{eventId}/review', [EventController::class, 'submitReview']);   // PUT: Update
- 
-        Route::put('events/{eventId}/review', [EventController::class, 'updateReview']);   // PUT: Update
+
+    Route::put('events/{eventId}/review', [EventController::class, 'updateReview']);   // PUT: Update
     Route::post('/approve-request/{id}', [UserController::class, 'approveRequest']);
     Route::post('/decline-request/{id}', [UserController::class, 'declineRequest']);
     Route::post('/get-users', [UserController::class, 'index']);
     Route::post('/search-users', [UserController::class, 'searchUsers']);
     Route::post('/request-registration', [UserController::class, 'requestRegistration']);
     Route::post('/update-users', [UserController::class, 'update']);
-      Route::post('/update-user-status', [UserController::class, 'updateStatus']);
-    
+    Route::post('/update-user-status', [UserController::class, 'updateStatus']);
+
     // Profile Management Routes
     Route::get('/profile', [UserController::class, 'getProfile']);
     Route::put('/profile', [UserController::class, 'updateProfile']);
     Route::post('/change-password', [UserController::class, 'changePassword']);
-    
+
     Route::get('/get-event/{eventId}', [EventController::class, 'getEvent']);
 
     // Nationalities CRUD (protected)
@@ -117,7 +120,6 @@ Route::middleware('auth.token')->group(function () {
     Route::get('/civil-statuses/{id}', [\App\Http\Controllers\CivilStatusController::class, 'show']);
     Route::put('/civil-statuses/{id}', [\App\Http\Controllers\CivilStatusController::class, 'update']);
     Route::delete('/civil-statuses/{id}', [\App\Http\Controllers\CivilStatusController::class, 'destroy']);
-
 });
 Route::get('/account-groups', [AccountGroupController::class, 'getGroups']);
 Route::get('/account-types/{groupId}', [AccountGroupController::class, 'getTypesByGroup']);
@@ -142,4 +144,4 @@ Route::post('reset-password', [ForgotPasswordController::class, 'resetPassword']
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
 });
-    Route::get('/generate-event-reports', [EventController::class, 'generatePdf']);
+Route::get('/generate-event-reports', [EventController::class, 'generatePdf']);

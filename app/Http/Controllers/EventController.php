@@ -10,6 +10,7 @@ use App\Models\EventRegistration;
 use App\Models\Notification;
 use App\Models\Review;
 use App\Models\UserAccountType;
+use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -66,6 +67,44 @@ class EventController extends Controller
         if (!$registration) {
             return response()->json([
                 'message' => 'You are not registered for this event.',
+                'type' => 2
+            ], 200);
+        }
+
+        // Enforce timing rules: attendance allowed from 60 minutes before start until event end
+        try {
+            // Build start/end datetimes
+            $start = \Carbon\Carbon::parse(($event->start_date ?? '') . ' ' . ($event->start_time ?? '00:00:00'));
+            $end = \Carbon\Carbon::parse(($event->end_date ?? $event->start_date ?? '') . ' ' . ($event->end_time ?? '23:59:59'));
+            $now = \Carbon\Carbon::now();
+
+            // Too early: earlier than 60 minutes before start
+            if ($now->lt($start->copy()->subMinutes(60))) {
+                return response()->json([
+                    'message' => 'Attendance opens 1 hour before the event starts.',
+                    'type' => 2
+                ], 200);
+            }
+
+            // Too late: event ended
+            if ($end && $now->gt($end)) {
+                return response()->json([
+                    'message' => 'The event has ended. Attendance is closed.',
+                    'type' => 2
+                ], 200);
+            }
+        } catch (\Exception $e) {
+            // If parsing fails, be conservative and block
+            return response()->json([
+                'message' => 'Unable to verify event schedule for attendance.',
+                'type' => 2
+            ], 200);
+        }
+
+        // Prevent duplicate attendance
+        if (($registration->is_attend ?? 0) == 1 || !empty($registration->attend_time)) {
+            return response()->json([
+                'message' => 'Attendance already marked for this event.',
                 'type' => 2
             ], 200);
         }
@@ -384,24 +423,21 @@ class EventController extends Controller
 
             $processedUserIds = []; // Store user IDs that we've already notified
 
-            // Notify users belonging to selected groups
+            // Notify users belonging to selected groups (via user.group_id, not account types)
             foreach ($categoryIds as $groupId) {
-                $users = UserAccountType::with('user')
-                    ->where('group_id', (int)trim($groupId))
-                    ->where('status', 1)
+                $users = User::where('group_id', (int)trim($groupId))
+                    ->where('status_id', 1)
                     ->get();
 
-                foreach ($users as $userAccountType) {
-                    $user = $userAccountType->user;
-
+                foreach ($users as $user) {
                     // Skip if user is null or was already processed
                     if (!$user || in_array($user->id, $processedUserIds)) {
                         continue;
                     }
 
-                    $title = '📅 New Event: ' . $validated['title'];
-                    $body = '📍 ' . ($validated['venue'] ?? 'Venue TBD') .
-                        ' | 🕒 ' . ($validated['start_time'] ?? '') .
+                    $title = ' New Event: ' . $validated['title'];
+                    $body = ' ' . ($validated['venue'] ?? 'Venue TBD') .
+                        '  ' . ($validated['start_time'] ?? '') .
                         ' ' . ($validated['start_date'] ?? '');
 
                     // Save notification to DB
@@ -864,11 +900,8 @@ class EventController extends Controller
 
         $events = $query->with(['locations'])->orderBy('start_date', 'asc')->get()
             ->map(function ($event) {
-                $eventTypes = $event->eventModes && $event->eventModes->count() > 0
-                    ? $event->eventModes->map(function($mode) { return $mode->eventType; })->filter()
-                    : collect([]);
-
-                $event->event_types = $eventTypes;
+                // Account type/eventType removed; ensure no legacy mapping
+                $event->event_types = collect([]);
 
                 // Add location data
                 $event->location_data = $event->locations->map(function ($location) {
@@ -899,6 +932,11 @@ class EventController extends Controller
         if ($request->filled('date')) {
             $date = Carbon::parse($request->date)->format('Y-m-d');
             $query->whereDate('start_date', $date);
+        } elseif ($request->filled('start_date') && $request->filled('end_date')) {
+            // Support date range queries for monthly calendar dots
+            $startDate = Carbon::parse($request->start_date)->format('Y-m-d');
+            $endDate = Carbon::parse($request->end_date)->format('Y-m-d');
+            $query->whereBetween('start_date', [$startDate, $endDate]);
         }
 
         // Return only core event fields; no heavy relationships for mobile calendar
@@ -928,25 +966,33 @@ class EventController extends Controller
 
     public function printSummary($id)
     {
-        $event = Event::findOrFail($id);
+        $event = Event::with(['eventRegistrations',  'locations','eventModes'])->findOrFail($id);
 
-        // Create QR code with event ID or barcode
-        $filename = 'event-' . $event->id . '.png';
-        $storagePath = storage_path('app/public/qrcodes/' . $filename);
-
-        // Generate QR code image only if not exists
-        if (!file_exists($storagePath)) {
-            QrCode::format('png')->size(200)->generate($event->barcode ?? $event->id, $storagePath);
+        // Resolve existing QR record by event_id. If absent, generate via controller.
+        $qrRecord = \App\Models\QR::where('event_id', $event->id)->first();
+        if (!$qrRecord) {
+            // Generate a QR using the dedicated controller to ensure consistent filename (barcode-based)
+            $qrController = new QRCodeController();
+            $generateRes = $qrController->generate($event->id);
+            // Refresh record after generation
+            $qrRecord = \App\Models\QR::where('event_id', $event->id)->first();
         }
 
-        // Pass full file path to PDF
-        $qrImage = $storagePath;
+        // Build both a public URL and an absolute public path for DomPDF image embedding
+        $qrUrl = null;
+        $qrPublicPath = null;
+        if ($qrRecord && $qrRecord->qr_path) {
+            $qrUrl = asset('storage/' . $qrRecord->qr_path);
+            $qrPublicPath = public_path('storage/' . $qrRecord->qr_path);
+        }
 
         $data = [
             'event' => $event,
-            'qrImage' => $qrImage,
+            'qrUrl' => $qrUrl,
+            'qrPublicPath' => $qrPublicPath,
         ];
 
+        // Enable remote content if needed and render PDF
         $pdf = Pdf::loadView('event-summary', $data);
         return $pdf->stream('event-summary.pdf');
     }
@@ -961,7 +1007,9 @@ class EventController extends Controller
 
         $query = Event::with([
             'eventRegistrations.details',
-            'eventModes.eventType',
+            // Remove invalid/unused account type relation
+            // 'eventModes.eventType',
+            'eventMode',
             'locations'
         ])
             ->where(function ($q) use ($validated) {
@@ -1010,6 +1058,7 @@ class EventController extends Controller
                     $q->where('sex_id', 2); // 2 = female
                 })
                 ->count();
+            $otherCount = max(0, $registered - $maleCount - $femaleCount);
 
             // Get reviews and ratings data
             $reviews = Review::where('event_id', $event->id)
@@ -1044,161 +1093,82 @@ class EventController extends Controller
             } elseif ($event->venue) {
                 $locationText = $event->venue;
             }
-            // Gender chart - handle zero data case
+            // Gender chart - modern doughnut with clear labels
             $genderChartUrl = "https://quickchart.io/chart?c=" . urlencode(json_encode([
                 'type' => 'doughnut',
                 'data' => [
-                    'labels' => ['👨 Male', '👩 Female'],
+                    'labels' => ['👨 Male', '👩 Female', '⚧ Other'],
                     'datasets' => [[
-                        'data' => [$maleCount > 0 ? $maleCount : 0, $femaleCount > 0 ? $femaleCount : 0],
-                        'backgroundColor' => [
-                            '#3B82F6', // Tailwind blue-500
-                            '#EC4899', // Tailwind pink-500
-                        ],
+                        'data' => [max(0, $maleCount), max(0, $femaleCount), max(0, $otherCount)],
+                        'backgroundColor' => ['#3B82F6', '#EC4899', '#10B981'],
                         'borderWidth' => 3,
                         'borderColor' => '#ffffff',
-                        'hoverBorderWidth' => 4,
-                        'hoverBorderColor' => '#1e40af'
                     ]],
                 ],
                 'options' => [
                     'plugins' => [
-                        'legend' => [
-                            'position' => 'bottom',
-                            'labels' => [
-                                'usePointStyle' => true,
-                                'pointStyle' => 'circle',
-                                'padding' => 15,
-                                'font' => ['size' => 12, 'weight' => 'bold'],
-                                'boxWidth' => 15,
-                                'color' => '#1e40af'
-                            ]
-                        ],
+                        'legend' => [ 'display' => false ],
                         'datalabels' => [
                             'display' => true,
                             'color' => '#ffffff',
-                            'font' => ['weight' => 'bold', 'size' => 13],
-                            'formatter' => 'function(value, context) { return value > 0 ? value : "0"; }',
-                            'textStrokeColor' => '#000000',
-                            'textStrokeWidth' => 1
+                            'font' => ['weight' => 'bold', 'size' => 12],
+                            'formatter' => 'function(value, ctx) { const total = (ctx.dataset.data||[]).reduce((a,b)=>a+(b||0),0); const pct = total ? Math.round((value/total)*100) : 0; return value + " (" + pct + "%)"; }'
                         ]
                     ],
-                    'layout' => [
-                        'padding' => [
-                            'top' => 10,
-                            'bottom' => 30,
-                            'left' => 10,
-                            'right' => 10
-                        ]
-                    ],
+                    'layout' => [ 'padding' => ['top' => 6, 'bottom' => 20, 'left' => 6, 'right' => 6] ],
                     'responsive' => true,
                     'maintainAspectRatio' => false,
                 ],
                 'plugins' => ['https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels']
             ]));
 
-            // Attendance chart - handle zero data case
+            // Attendance chart - horizontal bar with single dataset for clarity
             $attendanceChartUrl = "https://quickchart.io/chart?c=" . urlencode(json_encode([
                 'type' => 'bar',
                 'data' => [
-                    'labels' => ['📊 Event Participation'],
-                    'datasets' => [
-                        [
-                            'label' => '📝 Registered',
-                            'data' => [$registered > 0 ? $registered : 0],
-                            'backgroundColor' => '#10B981', // emerald-500
-                            'borderColor' => '#059669',
-                            'borderWidth' => 2,
-                            'borderRadius' => 4,
-                            'borderSkipped' => false
-                        ],
-                        [
-                            'label' => '✅ Attended',
-                            'data' => [$attended > 0 ? $attended : 0],
-                            'backgroundColor' => '#6366F1', // indigo-500
-                            'borderColor' => '#4f46e5',
-                            'borderWidth' => 2,
-                            'borderRadius' => 4,
-                            'borderSkipped' => false
-                        ],
-                        [
-                            'label' => '❌ Not Attended',
-                            'data' => [$notAttended > 0 ? $notAttended : 0],
-                            'backgroundColor' => '#F43F5E', // rose-500
-                            'borderColor' => '#e11d48',
-                            'borderWidth' => 2,
-                            'borderRadius' => 4,
-                            'borderSkipped' => false
-                        ]
-                    ],
+                    'labels' => ['📝 Registered', '✅ Attended', '❌ Not Attended'],
+                    'datasets' => [[
+                        'label' => 'Count',
+                        'data' => [max(0, $registered), max(0, $attended), max(0, $notAttended)],
+                        'backgroundColor' => ['#10B981', '#6366F1', '#F43F5E'],
+                        'borderColor' => ['#059669', '#4F46E5', '#E11D48'],
+                        'borderWidth' => 2,
+                        'borderRadius' => 6,
+                        'borderSkipped' => false
+                    ]]
                 ],
                 'options' => [
+                    'indexAxis' => 'y',
                     'scales' => [
-                        'y' => [
-                            'min' => 0,
-                            'beginAtZero' => true,
-                            'grid' => [
-                                'color' => '#e2e8f0',
-                                'lineWidth' => 1
-                            ],
-                            'ticks' => [
-                                'stepSize' => $registered > 10 ? 5 : 1,
-                                'callback' => 'function(value) { return Number.isInteger(value) ? value : null; }',
-                                'font' => ['size' => 11, 'weight' => 'bold'],
-                                'color' => '#475569'
-                            ]
-                        ],
                         'x' => [
-                            'grid' => [
-                                'display' => false
-                            ],
-                            'ticks' => [
-                                'font' => ['size' => 11, 'weight' => 'bold'],
-                                'maxRotation' => 0,
-                                'color' => '#1e40af'
-                            ]
+                            'beginAtZero' => true,
+                            'grid' => ['color' => '#e2e8f0', 'lineWidth' => 1],
+                            'ticks' => ['font' => ['size' => 11, 'weight' => 'bold'], 'color' => '#475569']
+                        ],
+                        'y' => [
+                            'grid' => ['display' => false],
+                            'ticks' => ['font' => ['size' => 12, 'weight' => 'bold'], 'color' => '#1e40af']
                         ]
                     ],
                     'plugins' => [
-                        'legend' => [
-                            'display' => true,
-                            'position' => 'bottom',
-                            'labels' => [
-                                'usePointStyle' => true,
-                                'pointStyle' => 'rect',
-                                'padding' => 15,
-                                'font' => ['size' => 11, 'weight' => 'bold'],
-                                'boxWidth' => 15,
-                                'color' => '#1e40af'
-                            ]
-                        ],
+                        'legend' => ['display' => false],
                         'datalabels' => [
                             'display' => true,
-                            'anchor' => 'end',
-                            'align' => 'top',
-                            'color' => '#1e40af',
-                            'backgroundColor' => '#ffffff',
-                            'borderColor' => '#e2e8f0',
-                            'borderWidth' => 1,
-                            'borderRadius' => 3,
+                            'anchor' => 'center',
+                            'align' => 'center',
+                            'color' => '#ffffff',
+                            'backgroundColor' => 'rgba(0,0,0,0.25)',
+                            'borderRadius' => 4,
                             'padding' => 4,
-                            'font' => [
-                                'weight' => 'bold',
-                                'size' => 11
-                            ],
-                            'formatter' => 'function(value, context) { return value > 0 ? value : "0"; }'
+                            'font' => ['weight' => 'bold', 'size' => 12],
+                            'formatter' => 'function(value) { return value > 0 ? value : "0"; }'
                         ]
                     ],
                     'layout' => [
-                        'padding' => [
-                            'bottom' => 30,
-                            'top' => 15,
-                            'left' => 10,
-                            'right' => 10
-                        ]
+                        'padding' => ['bottom' => 20, 'top' => 10, 'left' => 10, 'right' => 10]
                     ],
                     'responsive' => true,
-                    'maintainAspectRatio' => false,
+                    'maintainAspectRatio' => false
                 ],
                 'plugins' => ['https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels']
             ]));
@@ -1487,8 +1457,53 @@ class EventController extends Controller
     {
         $user = $request->user(); // assuming auth
 
-        $notification = Notification::where('user_id', $user->id)
+        // Get all unnotified notifications for the user
+        $notifications = Notification::where('user_id', $user->id)
             ->where('is_notify', 0)
+            ->orderBy('created_at', 'asc')
+            ->get();
+
+        // Mark them as notified only if we found some
+        if ($notifications->count() > 0) {
+            Notification::where('user_id', $user->id)
+                ->where('is_notify', 0)
+                ->update(['is_notify' => 1]);
+        }
+
+        return response()->json([
+            'status' => true,
+            'data' => $notifications->toArray()
+        ]);
+    }
+
+    public function markNotificationRead(Request $request, $id)
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['status' => false, 'message' => 'Unauthorized'], 401);
+        }
+
+        $notification = Notification::where('id', $id)
+            ->where('user_id', $user->id)
+            ->first();
+
+        if (!$notification) {
+            return response()->json(['status' => false, 'message' => 'Notification not found'], 404);
+        }
+
+        $notification->is_read = 1;
+        $notification->save();
+
+        return response()->json([
+            'status' => true,
+            'data' => $notification
+        ], 200);
+    }
+    public function getAllNotifications(Request $request){
+         $user = $request->user(); // assuming auth
+
+        $notification = Notification::where('user_id', $user->id)
+         
             ->orderBy('created_at', 'asc')
             ->first();
 
@@ -1500,6 +1515,29 @@ class EventController extends Controller
             'status' => true,
             'data' => $notification ? [$notification] : []
         ]);
+    }
+    public function getRecentNotifications(Request $request)
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['status' => false, 'message' => 'Unauthorized'], 401);
+        }
+
+        $notifications = Notification::where('user_id', $user->id)
+            ->where('is_read', 0)
+            ->where('is_notify', 0)
+            ->orderBy('created_at', 'desc')
+            ->limit(20)
+            ->get();
+        if ($notifications->count() > 0) {
+            $notifications->update(['is_notify' => 1]);
+        }
+        return response()->json([
+            'status' => true,
+            'data' => $notifications,
+            'total' => $notifications->count(),
+            'user' => $user,
+        ], 200);
     }
 
     // Returns event overview counts for registrations, attendance, and reviews
